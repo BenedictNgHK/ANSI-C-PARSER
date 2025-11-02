@@ -11,76 +11,142 @@ struct Node
 {
     Token t;
     std::vector<std::shared_ptr<Node>> children;
-    // Node(Token &&t){s}
     Node(Token t) : t(t) {};
     Node(TokenType type) : t(type, "") {};
     Node() = default;
 };
+
 class AST : public Scanner
 {
-
 protected:
     std::shared_ptr<Node> root;
     std::set<std::string> typeName;
     inline bool isTypeName(const std::string &name) { return typeName.count(name) > 0; }
+
+    // Helper functions
+    bool matchToken(TokenType expected);
+    bool lookahead(TokenType expected);
+    void expectToken(TokenType expected, const std::string &errorMsg = "");
+
+    // Primary and expressions
+    std::shared_ptr<Node> primaryExpression();
+    std::shared_ptr<Node> constant();
+    std::shared_ptr<Node> stringLiteral();
+    std::shared_ptr<Node> genericSelection();
+    std::shared_ptr<Node> genericAssocList();
+    std::shared_ptr<Node> genericAssociation();
+
+    // Expression parsing (top to bottom precedence)
+    std::shared_ptr<Node> expression();
+    std::shared_ptr<Node> assignmentExpression();
+    std::shared_ptr<Node> conditionalExpression();
+    std::shared_ptr<Node> logicalOrExpression();
+    std::shared_ptr<Node> logicalAndExpression();
+    std::shared_ptr<Node> inclusiveOrExpression();
+    std::shared_ptr<Node> exclusiveOrExpression();
+    std::shared_ptr<Node> andExpression();
+    std::shared_ptr<Node> equalityExpression();
+    std::shared_ptr<Node> relationalExpression();
+    std::shared_ptr<Node> shiftExpression();
+    std::shared_ptr<Node> additiveExpression();
+    std::shared_ptr<Node> multiplicativeExpression();
+    std::shared_ptr<Node> castExpression();
+    std::shared_ptr<Node> unaryExpression();
+    std::shared_ptr<Node> postfixExpression();
+    std::shared_ptr<Node> unaryOperator();
+    std::shared_ptr<Node> argumentExpressionList();
+    std::shared_ptr<Node> assignmentOperator();
+    std::shared_ptr<Node> constantExpression();
+
+    // Declaration parsing
+    std::shared_ptr<Node> declaration();
+    std::shared_ptr<Node> declarationSpecifiers();
+    std::shared_ptr<Node> initDeclaratorList();
+    std::shared_ptr<Node> initDeclarator();
+    std::shared_ptr<Node> storageClassSpecifier();
+    std::shared_ptr<Node> typeSpecifier();
+    std::shared_ptr<Node> typeQualifier();
+    std::shared_ptr<Node> functionSpecifier();
+    std::shared_ptr<Node> alignmentSpecifier();
+
+    // Type and declarator parsing
+    std::shared_ptr<Node> declarator();
+    std::shared_ptr<Node> directDeclarator();
+    std::shared_ptr<Node> pointer();
+    std::shared_ptr<Node> typeQualifierList();
+    std::shared_ptr<Node> parameterTypeList();
+    std::shared_ptr<Node> parameterList();
+    std::shared_ptr<Node> parameterDeclaration();
+    std::shared_ptr<Node> identifierList();
+    std::shared_ptr<Node> parseTypeName(); // Renamed to avoid conflict with member variable
+    std::shared_ptr<Node> abstractDeclarator();
+    std::shared_ptr<Node> directAbstractDeclarator();
+    std::shared_ptr<Node> specifierQualifierList();
+
+    // Struct and union
+    std::shared_ptr<Node> structOrUnionSpecifier();
+    std::shared_ptr<Node> structOrUnion();
+    std::shared_ptr<Node> structDeclarationList();
+    std::shared_ptr<Node> structDeclaration();
+    std::shared_ptr<Node> structDeclaratorList();
+    std::shared_ptr<Node> structDeclarator();
+
+    // Enum
+    std::shared_ptr<Node> enumSpecifier();
+    std::shared_ptr<Node> enumeratorList();
+    std::shared_ptr<Node> enumerator();
+    std::shared_ptr<Node> enumerationConstant();
+
+    // Initializer
+    std::shared_ptr<Node> initializer();
+    std::shared_ptr<Node> initializerList();
+    std::shared_ptr<Node> designation();
+    std::shared_ptr<Node> designatorList();
+    std::shared_ptr<Node> designator();
+
+    // Statement parsing
+    std::shared_ptr<Node> statement();
+    std::shared_ptr<Node> labeledStatement();
+    std::shared_ptr<Node> compoundStatement();
+    std::shared_ptr<Node> blockItemList();
+    std::shared_ptr<Node> blockItem();
+    std::shared_ptr<Node> expressionStatement();
+    std::shared_ptr<Node> selectionStatement();
+    std::shared_ptr<Node> iterationStatement();
+    std::shared_ptr<Node> jumpStatement();
+
+    // Static assert
+    std::shared_ptr<Node> staticAssertDeclaration();
+
+    // Top level parsing
+    std::shared_ptr<Node> translationUnit();
+    std::shared_ptr<Node> externalDeclaration();
+    std::shared_ptr<Node> functionDefinition();
+    std::shared_ptr<Node> declarationList();
+
+    // Existing functions
     std::shared_ptr<Node> parsingFile(std::shared_ptr<Node> root);
     std::shared_ptr<Node> includeStmt();
 
-    std::shared_ptr<Node> structUnionSpecifier(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> structDeclarationList(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> structDeclaration(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> initDeclarator(std::list<Token>::iterator begin);
-
-    std::shared_ptr<Node> structDeclaratorList(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> structDeclarator(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> declarator(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> directDeclarator(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> identifierList(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> parameterTypeList(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> parameterList(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> parameterDeclaration(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> declarationSpecifier(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> abstractDeclarator(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> directAbstractDeclarator(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> pointer(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> typeQualifierList(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> specifierQualifierList(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> enumSpecifier(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> enumerator(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> enumeratorList(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> initialzier(std::list<Token>::iterator begin);
-    std::shared_ptr<Node> assignmentExp(std::list<Token>::iterator begin);
+    // Helper check functions
     inline bool typeSpecifier(const std::list<Token>::iterator &itr)
     {
         TokenType type = itr->type;
         switch (type)
         {
         case TokenType::INT_TYPE:
-            return true;
         case TokenType::CHAR_TYPE:
-            return true;
         case TokenType::DOULBLE_TYPE:
-            return true;
         case TokenType::FLOAT_TYPE:
-            return true;
         case TokenType::LONG_TYPE:
-            return true;
         case TokenType::SHORT_TYPE:
-            return true;
         case TokenType::VOID:
-            return true;
         case TokenType::UNSINGED:
-            return true;
         case TokenType::SIGNED:
-            return true;
-
         case TokenType::STRUCT:
-            return true;
         case TokenType::UNION:
-            return true;
         case TokenType::ENUM:
             return true;
-
         default:
             return false;
         }
@@ -90,69 +156,57 @@ protected:
     {
         return itr->type == TokenType::STRUCT || itr->type == TokenType::UNION;
     }
+
     inline bool typeQualifier(const std::list<Token>::iterator &itr)
     {
         TokenType type = itr->type;
         switch (type)
         {
         case TokenType::CONST:
-            return true;
         case TokenType::VOLATILE:
             return true;
         default:
             return false;
         }
     }
+
     inline bool storageClassSpecifier(const std::list<Token>::iterator &itr)
     {
         TokenType type = itr->type;
         switch (type)
         {
         case TokenType::TYPEDEF:
-            return true;
         case TokenType::EXTERN:
-            return true;
         case TokenType::AUTO:
-            return true;
         case TokenType::STATIC:
-            return true;
         case TokenType::REGISTER:
             return true;
         default:
             return false;
         }
     }
+
     inline bool assignOperator(const std::list<Token>::iterator &itr)
     {
         switch (itr->type)
         {
         case TokenType::ASSIGN:
-            return true;
-
         case TokenType::MUL_ASSIGN:
-            return true;
         case TokenType::DIV_ASSIGN:
-            return true;
         case TokenType::MOD_ASSIGN:
-            return true;
         case TokenType::ADD_ASSIGN:
-            return true;
         case TokenType::SUB_ASSIGN:
-            return true;
         case TokenType::LEFT_ASSIGN:
-            return true;
         case TokenType::RIGHT_ASSIGN:
-            return true;
         case TokenType::OR_ASSIGN:
-            return true;
         case TokenType::AND_ASSIGN:
-            return true;
         case TokenType::XOR_ASSIGN:
             return true;
         default:
             return false;
         }
     }
+
     std::set<std::string> definedStruct;
     std::set<std::string> definedUnion;
 
