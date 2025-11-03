@@ -687,7 +687,7 @@ std::shared_ptr<Node> AST::initializer(std::list<Token>::iterator begin)
             ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
         else
         {
-            loggedError.addError(lineNo, "Expected '}' in initializer");
+            loggedError.addError(begin->lineNo, "Expected '}' in initializer");
             ungetToken();
         }
     }
@@ -742,7 +742,7 @@ std::shared_ptr<Node> AST::designation(std::list<Token>::iterator begin)
         ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
     else
     {
-        loggedError.addError(lineNo, "Expected '=' after designator list");
+        loggedError.addError(begin->lineNo, "Expected '=' after designator list");
         ungetToken();
     }
     return ret;
@@ -783,7 +783,7 @@ std::shared_ptr<Node> AST::designator(std::list<Token>::iterator begin)
         if (begin->type == TokenType::ID)
             ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
         else
-            loggedError.addError(lineNo, "Expected identifier after '.'");
+            loggedError.addError(begin->lineNo, "Expected identifier after '.'");
     }
     return ret;
 }
@@ -1545,7 +1545,7 @@ std::shared_ptr<Node> AST::compoundStatement(std::list<Token>::iterator begin)
             if (begin->type == TokenType::R_CUR)
                 ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
             else
-                loggedError.addError(lineNo, "Expected '}' in compound statement");
+                loggedError.addError(begin->lineNo, "Expected '}' in compound statement");
         }
     }
     return ret;
@@ -1558,8 +1558,34 @@ std::shared_ptr<Node> AST::blockItemList(std::list<Token>::iterator begin)
 
     ret->children.push_back(blockItem(begin));
 
-    while (peekNextToken()->type != TokenType::R_CUR && peekNextToken()->type != TokenType::END)
+    // Track previous position to detect infinite loops
+    auto prevToken = currentToken;
+    int noProgressCount = 0;
+    
+    while (true)
     {
+        auto next = peekNextToken();
+        if (next->type == TokenType::R_CUR || next->type == TokenType::END)
+            break;
+        
+        // Check if we're making progress
+        if (currentToken == prevToken)
+        {
+            noProgressCount++;
+            if (noProgressCount > 3)
+            {
+                // Parser is stuck - advance anyway to prevent infinite loop
+                loggedError.addError(next->lineNo, "Parser recovery: skipping token to prevent infinite loop");
+                getNextToken();
+                break;
+            }
+        }
+        else
+        {
+            noProgressCount = 0;
+            prevToken = currentToken;
+        }
+        
         begin = getNextToken();
         ret->children.push_back(blockItem(begin));
     }
@@ -1600,7 +1626,7 @@ std::shared_ptr<Node> AST::expressionStatement(std::list<Token>::iterator begin)
         if (begin->type == TokenType::SEMI_COLON)
             ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
         else
-            loggedError.addError(lineNo, "Expected ';' after expression");
+            loggedError.addError(begin->lineNo, "Expected ';' after expression");
     }
     return ret;
 }
@@ -1777,20 +1803,32 @@ std::shared_ptr<Node> AST::jumpStatement(std::list<Token>::iterator begin)
     }
     else if (begin->type == TokenType::RETURN)
     {
+        int returnLineNo = begin->lineNo;  // Save line number of return statement (this is the correct line)
         ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
         begin = peekNextToken();
+        
         if (begin->type != TokenType::SEMI_COLON)
         {
             begin = getNextToken();
             ret->children.push_back(expression(begin));
-            begin = getNextToken();
+            begin = peekNextToken();  // Peek at next token to check for semicolon
         }
         else
         {
             begin = getNextToken();
         }
+        
         if (begin->type == TokenType::SEMI_COLON)
+        {
+            begin = getNextToken();
             ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else
+        {
+            // Missing semicolon after return statement - use the return token's line number
+            // This is more accurate than using the next token's line number
+            loggedError.addError(returnLineNo, "Expected ';' after return statement");
+        }
     }
     return ret;
 }
@@ -2187,7 +2225,7 @@ std::shared_ptr<Node> AST::conditionalExpression(std::list<Token>::iterator begi
             ret->children.push_back(conditionalExpression(begin));
         }
         else
-            loggedError.addError(lineNo, "Expected ':' in conditional expression");
+            loggedError.addError(begin->lineNo, "Expected ':' in conditional expression");
     }
     return ret;
 }
