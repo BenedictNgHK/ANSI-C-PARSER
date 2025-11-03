@@ -523,12 +523,3 @@ declaration_list
 	: declaration
 	| declaration_list declaration
 	;
-
-%%
-#include <stdio.h>
-
-void yyerror(const char *s)
-{
-	fflush(stdout);
-	fprintf(stderr, "*** %s\n", s);
-}

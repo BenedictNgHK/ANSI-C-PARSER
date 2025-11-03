@@ -38,7 +38,7 @@ const std::map<TokenType, std::string> TokenToString::table = {
     {TokenType::RIGHT_SHIFT, "RIGHT_SHIFT"},
     {TokenType::DIRECT_DECLARATOR, "DIRECT_DECLARATOR"},
     {TokenType::POINTER, "POINTER"},
-    {TokenType::ASSIGNMENT_EXP, "ASSIGNMENT_EXP"},
+    {TokenType::ASSIGNMENT_EXPRESSION, "ASSIGNMENT_EXPRESSION"},
     {TokenType::PARAMETER_TYPE_LIST, "PARAMETER_TYPE_LIST"},
 
     {TokenType::PARAMETER_LIST, "PARAMETER_LIST"},
@@ -53,6 +53,10 @@ const std::map<TokenType, std::string> TokenToString::table = {
     {TokenType::ID, "ID"},
     {TokenType::INITIALIZER, "INITIALIZER"},
     {TokenType::BACKSLASH, "BACKSLASH"},
+    {TokenType::GOTO, "GOTO"},
+    {TokenType::QUESTION, "QUESTION"},
+    {TokenType::CARET, "CARET"},
+    {TokenType::PIPE, "PIPE"},
 
     // Keyword
     {TokenType::DO, "DO"},
@@ -89,6 +93,21 @@ const std::map<TokenType, std::string> TokenToString::table = {
     {TokenType::CONST, "CONST"},
     {TokenType::UNSINGED, "UNSINGED"},
     {TokenType::ENUM, "ENUM"},
+    
+    // C11 keywords
+    {TokenType::INLINE, "INLINE"},
+    {TokenType::RESTRICT, "RESTRICT"},
+    {TokenType::BOOL_TYPE, "BOOL_TYPE"},
+    {TokenType::COMPLEX, "COMPLEX"},
+    {TokenType::IMAGINARY, "IMAGINARY"},
+    {TokenType::ALIGNAS, "ALIGNAS"},
+    {TokenType::ALIGNOF, "ALIGNOF"},
+    {TokenType::ATOMIC, "ATOMIC"},
+    {TokenType::GENERIC, "GENERIC"},
+    {TokenType::NORETURN, "NORETURN"},
+    {TokenType::STATIC_ASSERT, "STATIC_ASSERT"},
+    {TokenType::THREAD_LOCAL, "THREAD_LOCAL"},
+    {TokenType::FUNC_NAME, "FUNC_NAME"},
 
     // {TokenType::INT, "INT"},
     // {TokenType::CHAR, "CHAR"},
@@ -131,18 +150,85 @@ const std::map<TokenType, std::string> TokenToString::table = {
 
     // non-terminal symbols
     {TokenType::TRANSLATION_UNIT, "TRANSLATION_UNIT"},
-    {TokenType::STRUCT_UNION_SPECIFIER, "STRUCT_UNION_SPECIFIER"},
-    {TokenType::STRUCT_DECLARATION_LIST, "    STRUCT_DECLARATION_LIST"},
+    {TokenType::EXTERNAL_DECLARATION, "EXTERNAL_DECLARATION"},
+    {TokenType::FUNCTION_DEFINITION, "FUNCTION_DEFINITION"},
+    {TokenType::DECLARATION, "DECLARATION"},
+    {TokenType::DECLARATION_LIST, "DECLARATION_LIST"},
     {TokenType::INCLUDE_STMT, "INCLUDE_STMT"},
+    
+    // Expressions
+    {TokenType::PRIMARY_EXPRESSION, "PRIMARY_EXPRESSION"},
+    {TokenType::POSTFIX_EXPRESSION, "POSTFIX_EXPRESSION"},
+    {TokenType::ARGUMENT_EXPRESSION_LIST, "ARGUMENT_EXPRESSION_LIST"},
+    {TokenType::UNARY_EXPRESSION, "UNARY_EXPRESSION"},
+    {TokenType::CAST_EXPRESSION, "CAST_EXPRESSION"},
+    {TokenType::MULTIPLICATIVE_EXPRESSION, "MULTIPLICATIVE_EXPRESSION"},
+    {TokenType::ADDITIVE_EXPRESSION, "ADDITIVE_EXPRESSION"},
+    {TokenType::SHIFT_EXPRESSION, "SHIFT_EXPRESSION"},
+    {TokenType::RELATIONAL_EXPRESSION, "RELATIONAL_EXPRESSION"},
+    {TokenType::EQUALITY_EXPRESSION, "EQUALITY_EXPRESSION"},
+    {TokenType::AND_EXPRESSION, "AND_EXPRESSION"},
+    {TokenType::EXCLUSIVE_OR_EXPRESSION, "EXCLUSIVE_OR_EXPRESSION"},
+    {TokenType::INCLUSIVE_OR_EXPRESSION, "INCLUSIVE_OR_EXPRESSION"},
+    {TokenType::LOGICAL_AND_EXPRESSION, "LOGICAL_AND_EXPRESSION"},
+    {TokenType::LOGICAL_OR_EXPRESSION, "LOGICAL_OR_EXPRESSION"},
+    {TokenType::CONDITIONAL_EXPRESSION, "CONDITIONAL_EXPRESSION"},
+    {TokenType::ASSIGNMENT_EXPRESSION, "ASSIGNMENT_EXPRESSION"},
+    {TokenType::EXPRESSION, "EXPRESSION"},
+    {TokenType::CONSTANT_EXPRESSION, "CONSTANT_EXPRESSION"},
+    
+    // Declarations
+    {TokenType::STRUCT_UNION_SPECIFIER, "STRUCT_UNION_SPECIFIER"},
+    {TokenType::STRUCT_DECLARATION_LIST, "STRUCT_DECLARATION_LIST"},
     {TokenType::SPECIFIER_QUALIFIER_LIST, "SPECIFIER_QUALIFIER_LIST"},
     {TokenType::STRUCT_DECLARATION, "STRUCT_DECLARATION"},
     {TokenType::STRUCT_DECLARATOR, "STRUCT_DECLARATOR"},
-    {TokenType::DECLARATOR, "DECLARATOR"},
     {TokenType::STRUCT_DECLARATOR_LIST, "STRUCT_DECLARATOR_LIST"},
+    {TokenType::DECLARATOR, "DECLARATOR"},
+    {TokenType::DIRECT_DECLARATOR, "DIRECT_DECLARATOR"},
+    {TokenType::POINTER, "POINTER"},
+    {TokenType::PARAMETER_TYPE_LIST, "PARAMETER_TYPE_LIST"},
+    {TokenType::PARAMETER_LIST, "PARAMETER_LIST"},
+    {TokenType::PARAMETER_DECLARATION, "PARAMETER_DECLARATION"},
+    {TokenType::DECLARATION_SPECIFIERS, "DECLARATION_SPECIFIERS"},
     {TokenType::INIT_DECLARATOR, "INIT_DECLARATOR"},
-    {TokenType::ENUM_SPECIFIER, "ENUM_SPECIFIER,"},
+    {TokenType::INIT_DECLARATOR_LIST, "INIT_DECLARATOR_LIST"},
+    {TokenType::ABSTRACT_DECLARATOR, "ABSTRACT_DECLARATOR"},
+    {TokenType::IDENTIFIER_LIST, "IDENTIFIER_LIST"},
+    {TokenType::DIRECT_ABSTRACT_DECLARATOR, "DIRECT_ABSTRACT_DECLARATOR"},
+    {TokenType::TYPE_QUALIFIER_LIST, "TYPE_QUALIFIER_LIST"},
+    {TokenType::TYPE_NAME, "TYPE_NAME"},
+    {TokenType::INITIALIZER, "INITIALIZER"},
+    {TokenType::INITIALIZER_LIST, "INITIALIZER_LIST"},
+    {TokenType::DESIGNATION, "DESIGNATION"},
+    {TokenType::DESIGNATOR_LIST, "DESIGNATOR_LIST"},
+    {TokenType::DESIGNATOR, "DESIGNATOR"},
+    {TokenType::ENUM_SPECIFIER, "ENUM_SPECIFIER"},
     {TokenType::ENUMERATOR_LIST, "ENUMERATOR_LIST"},
-    {TokenType::ENUMERATOR, "ENUMERATOR"}};
+    {TokenType::ENUMERATOR, "ENUMERATOR"},
+    
+    // Statements
+    {TokenType::STATEMENT, "STATEMENT"},
+    {TokenType::LABELED_STATEMENT, "LABELED_STATEMENT"},
+    {TokenType::COMPOUND_STATEMENT, "COMPOUND_STATEMENT"},
+    {TokenType::BLOCK_ITEM_LIST, "BLOCK_ITEM_LIST"},
+    {TokenType::BLOCK_ITEM, "BLOCK_ITEM"},
+    {TokenType::EXPRESSION_STATEMENT, "EXPRESSION_STATEMENT"},
+    {TokenType::SELECTION_STATEMENT, "SELECTION_STATEMENT"},
+    {TokenType::ITERATION_STATEMENT, "ITERATION_STATEMENT"},
+    {TokenType::JUMP_STATEMENT, "JUMP_STATEMENT"},
+    
+    // C11 specific non-terminals
+    {TokenType::GENERIC_SELECTION, "GENERIC_SELECTION"},
+    {TokenType::GENERIC_ASSOC_LIST, "GENERIC_ASSOC_LIST"},
+    {TokenType::GENERIC_ASSOCIATION, "GENERIC_ASSOCIATION"},
+    {TokenType::STATIC_ASSERT_DECLARATION, "STATIC_ASSERT_DECLARATION"},
+    {TokenType::ALIGNMENT_SPECIFIER, "ALIGNMENT_SPECIFIER"},
+    {TokenType::ATOMIC_TYPE_SPECIFIER, "ATOMIC_TYPE_SPECIFIER"},
+    {TokenType::FUNCTION_SPECIFIER, "FUNCTION_SPECIFIER"},
+    {TokenType::STORAGE_CLASS_SPECIFIER, "STORAGE_CLASS_SPECIFIER"},
+    {TokenType::TYPE_SPECIFIER, "TYPE_SPECIFIER"},
+    {TokenType::TYPE_QUALIFIER, "TYPE_QUALIFIER"}};
 
 std::string
 TokenToString::operator()(const TokenType &t)
@@ -229,6 +315,7 @@ const std::map<std::string, TokenType> Keyword::table = {
     {"else", TokenType::ELSE},
     {"main", TokenType::MAIN},
     {"return", TokenType::RETURN},
+    {"goto", TokenType::GOTO},
     // Type
     {"int", TokenType::INT_TYPE},
     {"char", TokenType::CHAR_TYPE},
@@ -250,7 +337,24 @@ const std::map<std::string, TokenType> Keyword::table = {
     {"signed", TokenType::SIGNED},
     {"register", TokenType::REGISTER},
     {"auto", TokenType::AUTO},
-    {"extern", TokenType::EXTERN}};
+    {"extern", TokenType::EXTERN},
+    
+    // C11 keywords
+    {"inline", TokenType::INLINE},
+    {"_Inline", TokenType::INLINE},
+    {"restrict", TokenType::RESTRICT},
+    {"_Restrict", TokenType::RESTRICT},
+    {"_Bool", TokenType::BOOL_TYPE},
+    {"_Complex", TokenType::COMPLEX},
+    {"_Imaginary", TokenType::IMAGINARY},
+    {"_Alignas", TokenType::ALIGNAS},
+    {"_Alignof", TokenType::ALIGNOF},
+    {"_Atomic", TokenType::ATOMIC},
+    {"_Generic", TokenType::GENERIC},
+    {"_Noreturn", TokenType::NORETURN},
+    {"_Static_assert", TokenType::STATIC_ASSERT},
+    {"_Thread_local", TokenType::THREAD_LOCAL},
+    {"__func__", TokenType::FUNC_NAME}};
 
 TokenType Keyword::operator()(const std::string &s)
 {
@@ -308,7 +412,10 @@ const std::map<std::string, TokenType> Operator::table = {
     {"||", TokenType::OR},
     {"->", TokenType::ARRORW},
     {"++", TokenType::INC},
-    {"--", TokenType::DEC}};
+    {"--", TokenType::DEC},
+    {"?", TokenType::QUESTION},
+    {"^", TokenType::CARET},
+    {"|", TokenType::PIPE}};
 
 TokenType Operator::operator()(const std::string &&s)
 {
@@ -351,7 +458,7 @@ bool Operator::isOperator(const char ch1, const char ch2)
 }
 bool Operator::beginOperator(const char ch)
 {
-    return (ch == '*' || ch == '+' || ch == '%' || ch == '-' || ch == '/' || ch == '<' || ch == '>' || ch == '!' || ch == '&' || ch == '=' || ch == '|' || ch == '.' || ch == '^');
+    return (ch == '*' || ch == '+' || ch == '%' || ch == '-' || ch == '/' || ch == '<' || ch == '>' || ch == '!' || ch == '&' || ch == '=' || ch == '|' || ch == '.' || ch == '^' || ch == '?' || ch == '~');
 }
 
 const std::map<char, TokenType> Symbol::table = {

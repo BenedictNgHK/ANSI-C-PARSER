@@ -12,7 +12,7 @@ Scanner::Scanner(const std::string &path, Error &e) : lineNo(1), loggedError(e)
     std::string buffer;
     inputFile.open(path, std::ifstream::in);
     TokenToString tokenToString;
-    currentToken = symbolTable.begin();
+    currentToken = symbolTable.end();
 }
 
 void Scanner::appendList(std::list<Token> &list)
@@ -679,14 +679,26 @@ std::list<Token>::iterator Scanner::getNextToken()
     if (!end)
         appendList(symbolTable);
     if (symbolTable.empty())
+        return symbolTable.end();
+
+    if (currentToken == symbolTable.end())
+    {
+        currentToken = symbolTable.begin();
         return currentToken;
-    auto temp = std::next(currentToken);
-    if (temp->type != TokenType::END)
-        currentToken = temp;
-    if (temp->type == TokenType::END || currentToken->type == TokenType::END)
-        currentToken->type = TokenType::END;
+    }
+
+    auto next = std::next(currentToken);
+    while (next == symbolTable.end() && !end)
+    {
+        appendList(symbolTable);
+        next = std::next(currentToken);
+    }
+
+    if (next == symbolTable.end())
+        return currentToken;
+
+    currentToken = next;
     return currentToken;
-    // Move currentToken to the
 }
 std::list<Token>::iterator Scanner::peekNextToken()
 {
@@ -695,8 +707,17 @@ std::list<Token>::iterator Scanner::peekNextToken()
     if (symbolTable.empty())
         return symbolTable.end();
 
-    auto temp = std::next(currentToken);
-    return temp;
+    if (currentToken == symbolTable.end())
+        return symbolTable.begin();
+
+    auto next = std::next(currentToken);
+    while (next == symbolTable.end() && !end)
+    {
+        appendList(symbolTable);
+        next = std::next(currentToken);
+    }
+
+    return next;
 }
 std::list<Token>::iterator Scanner::peekPrevToken()
 {

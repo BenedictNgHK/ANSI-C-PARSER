@@ -1,2083 +1,39 @@
 #include "AST.hpp"
 
-AST::AST(const std::string &path, Error &e) : Scanner(path, e), root(std::make_shared<Node>(TokenType::TRANSLATION_UNIT))
+AST::AST(const std::string &path, Error &e) : Scanner(path, e), root(std::make_shared<Node>(Node(TokenType::TRANSLATION_UNIT)))
 {
     root->t.lexeme = path;
-    root = translationUnit();
+    root = parsingFile(root);
 }
-
-// Helper functions
-bool AST::matchToken(TokenType expected)
-{
-    auto token = peekNextToken();
-    if (token == symbolTable.end())
-        return false;
-    return token->type == expected;
-}
-
-bool AST::lookahead(TokenType expected)
-{
-    return matchToken(expected);
-}
-
-void AST::expectToken(TokenType expected, const std::string &errorMsg)
-{
-    auto token = getNextToken();
-    if (token->type != expected)
-    {
-        if (errorMsg.empty())
-            loggedError.addError(lineNo, "Unexpected token");
-        else
-            loggedError.addError(lineNo, errorMsg);
-    }
-}
-
-// Top level parsing
-std::shared_ptr<Node> AST::translationUnit()
-{
-    auto node = std::make_shared<Node>(TokenType::TRANSLATION_UNIT);
-    node->t.lexeme = root->t.lexeme;
-
-    while (!matchToken(TokenType::END))
-    {
-        if (matchToken(TokenType::INCLUDE))
-        {
-            node->children.push_back(includeStmt());
-        }
-        else
-        {
-            node->children.push_back(externalDeclaration());
-        }
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::externalDeclaration()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-
-    // Check if it's a function definition
-    auto lookaheadToken = peekNextToken();
-
-    // Try to parse declaration specifiers
-    if (storageClassSpecifier(lookaheadToken) || typeSpecifier(lookaheadToken) ||
-        typeQualifier(lookaheadToken) || isTypeName(lookaheadToken->lexeme))
-    {
-        // Check if followed by declarator and '{' or ';'
-        auto tempToken = lookaheadToken;
-        int depth = 0;
-        bool foundDeclarator = false;
-        bool foundLBrace = false;
-
-        // Simple lookahead to determine if function definition
-        while (tempToken != symbolTable.end() && tempToken->type != TokenType::END)
-        {
-            if (tempToken->type == TokenType::L_BR)
-                depth++;
-            else if (tempToken->type == TokenType::R_BR)
-                depth--;
-            else if (depth == 0 && tempToken->type == TokenType::L_CUR)
-            {
-                foundLBrace = true;
-                foundDeclarator = true;
-                break;
-            }
-            else if (depth == 0 && tempToken->type == TokenType::SEMI_COLON)
-            {
-                break;
-            }
-
-            appendList(symbolTable);
-            tempToken = peekNextToken();
-            if (tempToken == symbolTable.end())
-                appendList(symbolTable);
-            tempToken = peekNextToken();
-        }
-
-        if (foundLBrace && foundDeclarator)
-        {
-            // It's a function definition
-            return functionDefinition();
-        }
-    }
-
-    // Otherwise it's a declaration
-    return declaration();
-}
-
-std::shared_ptr<Node> AST::functionDefinition()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-
-    node->children.push_back(declarationSpecifiers());
-
-    auto declNode = declarator();
-    node->children.push_back(declNode);
-
-    // Optional declaration list (K&R style)
-    if (matchToken(TokenType::INT_TYPE) || matchToken(TokenType::CHAR_TYPE) ||
-        matchToken(TokenType::VOID) || storageClassSpecifier(peekNextToken()))
-    {
-        node->children.push_back(declarationList());
-    }
-
-    node->children.push_back(compoundStatement());
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::declarationList()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-
-    node->children.push_back(declaration());
-
-    while (matchToken(TokenType::INT_TYPE) || matchToken(TokenType::CHAR_TYPE) ||
-           matchToken(TokenType::VOID) || storageClassSpecifier(peekNextToken()))
-    {
-        node->children.push_back(declaration());
-    }
-
-    return node;
-}
-
 std::shared_ptr<Node> AST::parsingFile(std::shared_ptr<Node> root)
 {
-    return translationUnit();
-}
-
-// Expression parsing - following operator precedence from grammar.y
-std::shared_ptr<Node> AST::expression()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    node->children.push_back(assignmentExpression());
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto commaToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*commaToken));
-        node->children.push_back(assignmentExpression());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::assignmentExpression()
-{
-    // Check if it starts with unary operator tokens (for assignment)
-    auto lookaheadToken = peekNextToken();
-    auto secondToken = symbolTable.end();
-    if (lookaheadToken != symbolTable.end())
-    {
-        auto temp = std::next(lookaheadToken);
-        if (temp != symbolTable.end())
-            secondToken = temp;
-    }
-
-    // If followed by assignment operator, parse assignment
-    if (lookaheadToken->type == TokenType::ID || lookaheadToken->type == TokenType::MUL ||
-        lookaheadToken->type == TokenType::INC || lookaheadToken->type == TokenType::DEC ||
-        (secondToken != symbolTable.end() && assignOperator(secondToken)))
-    {
-        // Try to parse as assignment
-        auto unary = unaryExpression();
-        if (assignOperator(peekNextToken()))
-        {
-            auto assignNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            assignNode->children.push_back(unary);
-            assignNode->children.push_back(assignmentOperator());
-            assignNode->children.push_back(assignmentExpression());
-            return assignNode;
-        }
-        // Otherwise return conditional
-        return conditionalExpression();
-    }
-
-    return conditionalExpression();
-}
-
-std::shared_ptr<Node> AST::assignmentOperator()
-{
-    auto token = getNextToken();
-    if (assignOperator(token))
-    {
-        return std::make_shared<Node>(*token);
-    }
-    loggedError.addError(lineNo, "Expected assignment operator");
-    return std::make_shared<Node>(TokenType::ASSIGN);
-}
-
-std::shared_ptr<Node> AST::conditionalExpression()
-{
-    auto node = logicalOrExpression();
-
-    // Check for ternary operator '?'
-    auto token = peekNextToken();
-    if (token != symbolTable.end() && token->lexeme == "?")
-    {
-        auto questionToken = getNextToken();
-        auto questionNode = std::make_shared<Node>(Token(TokenType::ASSIGN, "?"));
-
-        auto exprNode = expression();
-        expectToken(TokenType::COLON, "Expected ':' after '?'");
-        auto colonToken = getNextToken();
-        auto colonNode = std::make_shared<Node>(*colonToken);
-
-        auto condNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        condNode->children.push_back(node);
-        condNode->children.push_back(questionNode);
-        condNode->children.push_back(exprNode);
-        condNode->children.push_back(colonNode);
-        condNode->children.push_back(conditionalExpression());
-
-        return condNode;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::logicalOrExpression()
-{
-    auto node = logicalAndExpression();
-
-    while (matchToken(TokenType::OR))
-    {
-        auto opToken = getNextToken();
-        auto opNode = std::make_shared<Node>(*opToken);
-        auto right = logicalAndExpression();
-
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(node);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(right);
-
-        node = exprNode;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::logicalAndExpression()
-{
-    auto node = inclusiveOrExpression();
-
-    while (matchToken(TokenType::AND))
-    {
-        auto opToken = getNextToken();
-        auto opNode = std::make_shared<Node>(*opToken);
-        auto right = inclusiveOrExpression();
-
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(node);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(right);
-
-        node = exprNode;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::inclusiveOrExpression()
-{
-    auto node = exclusiveOrExpression();
-
-    // Check for bitwise OR '|' (not logical OR '||')
-    while (true)
-    {
-        auto token = peekNextToken();
-        if (token == symbolTable.end())
-            break;
-        // Check if it's a single '|' (bitwise OR)
-        if (token->lexeme == "|" && (std::next(token) == symbolTable.end() ||
-                                     std::next(token)->lexeme != "|"))
-        {
-            getNextToken(); // Consume the operator
-            auto opNode = std::make_shared<Node>(Token(TokenType::OR, "|"));
-            auto right = exclusiveOrExpression();
-
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(node);
-            exprNode->children.push_back(opNode);
-            exprNode->children.push_back(right);
-
-            node = exprNode;
-        }
-        else
-            break;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::exclusiveOrExpression()
-{
-    auto node = andExpression();
-
-    // Check for XOR operator '^' (not '^=')
-    while (true)
-    {
-        auto token = peekNextToken();
-        if (token == symbolTable.end())
-            break;
-        // Check if it's a single '^' (XOR)
-        if (token->lexeme == "^" && (std::next(token) == symbolTable.end() ||
-                                     std::next(token)->lexeme != "="))
-        {
-            getNextToken(); // Consume the operator
-            auto opNode = std::make_shared<Node>(Token(TokenType::XOR_ASSIGN, "^"));
-            auto right = andExpression();
-
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(node);
-            exprNode->children.push_back(opNode);
-            exprNode->children.push_back(right);
-
-            node = exprNode;
-        }
-        else
-            break;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::andExpression()
-{
-    auto node = equalityExpression();
-
-    // Check for bitwise AND '&' (not '&&' or '&=')
-    while (true)
-    {
-        auto token = peekNextToken();
-        if (token == symbolTable.end())
-            break;
-        // Check if it's a single '&' (bitwise AND)
-        if (token->lexeme == "&" && (std::next(token) == symbolTable.end() ||
-                                     (std::next(token)->lexeme != "&" && std::next(token)->lexeme != "=")))
-        {
-            auto opToken = getNextToken();
-            auto opNode = std::make_shared<Node>(*opToken);
-            auto right = equalityExpression();
-
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(node);
-            exprNode->children.push_back(opNode);
-            exprNode->children.push_back(right);
-
-            node = exprNode;
-        }
-        else
-            break;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::equalityExpression()
-{
-    auto node = relationalExpression();
-
-    while (matchToken(TokenType::EQ) || matchToken(TokenType::UNEQUAL))
-    {
-        auto opToken = getNextToken();
-        auto opNode = std::make_shared<Node>(*opToken);
-        auto right = relationalExpression();
-
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(node);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(right);
-
-        node = exprNode;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::relationalExpression()
-{
-    auto node = shiftExpression();
-
-    while (matchToken(TokenType::LT) || matchToken(TokenType::GT) ||
-           matchToken(TokenType::LTE) || matchToken(TokenType::GTE))
-    {
-        auto opToken = getNextToken();
-        auto opNode = std::make_shared<Node>(*opToken);
-        auto right = shiftExpression();
-
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(node);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(right);
-
-        node = exprNode;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::shiftExpression()
-{
-    auto node = additiveExpression();
-
-    while (matchToken(TokenType::LEF_SHIFT) || matchToken(TokenType::RIGHT_SHIFT))
-    {
-        auto opToken = getNextToken();
-        auto opNode = std::make_shared<Node>(*opToken);
-        auto right = additiveExpression();
-
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(node);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(right);
-
-        node = exprNode;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::additiveExpression()
-{
-    auto node = multiplicativeExpression();
-
-    while (matchToken(TokenType::PLUS) || matchToken(TokenType::MINUS))
-    {
-        auto opToken = getNextToken();
-        auto opNode = std::make_shared<Node>(*opToken);
-        auto right = multiplicativeExpression();
-
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(node);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(right);
-
-        node = exprNode;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::multiplicativeExpression()
-{
-    auto node = castExpression();
-
-    while (matchToken(TokenType::MUL) || matchToken(TokenType::DIV) || matchToken(TokenType::MOD))
-    {
-        auto opToken = getNextToken();
-        auto opNode = std::make_shared<Node>(*opToken);
-        auto right = castExpression();
-
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(node);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(right);
-
-        node = exprNode;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::castExpression()
-{
-    // Check for cast: '(' type_name ')'
-    if (matchToken(TokenType::L_BR))
-    {
-        auto lookaheadToken = peekNextToken();
-        // Check if next tokens form a type name
-        if (typeSpecifier(lookaheadToken) || typeQualifier(lookaheadToken) ||
-            storageClassSpecifier(lookaheadToken) || isTypeName(lookaheadToken->lexeme))
-        {
-            auto lbrToken = getNextToken();
-            auto typeNameNode = parseTypeName();
-            if (matchToken(TokenType::R_BR))
-            {
-                auto rbrToken = getNextToken();
-                auto castNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-                castNode->children.push_back(std::make_shared<Node>(*lbrToken));
-                castNode->children.push_back(typeNameNode);
-                castNode->children.push_back(std::make_shared<Node>(*rbrToken));
-                castNode->children.push_back(castExpression());
-                return castNode;
-            }
-            else
-            {
-                ungetToken();
-                ungetToken();
-                ungetToken();
-            }
-        }
-    }
-
-    return unaryExpression();
-}
-
-std::shared_ptr<Node> AST::unaryExpression()
-{
-    // Check for prefix operators
-    if (matchToken(TokenType::INC) || matchToken(TokenType::DEC))
-    {
-        auto opToken = getNextToken();
-        auto opNode = std::make_shared<Node>(*opToken);
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(unaryExpression());
-        return exprNode;
-    }
-
-    // Check for sizeof/alignof
-    if (matchToken(TokenType::SIZEOF))
-    {
-        auto sizeofToken = getNextToken();
-        auto sizeofNode = std::make_shared<Node>(*sizeofToken);
-
-        if (matchToken(TokenType::L_BR))
-        {
-            auto lbr = getNextToken();
-            auto typeNode = parseTypeName();
-            expectToken(TokenType::R_BR, "Expected ')' after type name in sizeof");
-            auto rbr = getNextToken();
-
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(sizeofNode);
-            exprNode->children.push_back(std::make_shared<Node>(*lbr));
-            exprNode->children.push_back(typeNode);
-            exprNode->children.push_back(std::make_shared<Node>(*rbr));
-            return exprNode;
-        }
-        else
-        {
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(sizeofNode);
-            exprNode->children.push_back(unaryExpression());
-            return exprNode;
-        }
-    }
-
-    // Check for unary operators
-    if (matchToken(TokenType::REFERENCE) || matchToken(TokenType::MUL) ||
-        matchToken(TokenType::PLUS) || matchToken(TokenType::MINUS) ||
-        matchToken(TokenType::TILDE) || matchToken(TokenType::NOT))
-    {
-        auto opNode = unaryOperator();
-        auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        exprNode->children.push_back(opNode);
-        exprNode->children.push_back(castExpression());
-        return exprNode;
-    }
-
-    return postfixExpression();
-}
-
-std::shared_ptr<Node> AST::unaryOperator()
-{
-    auto token = getNextToken();
-    return std::make_shared<Node>(*token);
-}
-
-std::shared_ptr<Node> AST::postfixExpression()
-{
-    auto node = primaryExpression();
+    TokenToString t;
 
     while (true)
     {
-        // Array subscript
-        if (matchToken(TokenType::L_SQR))
-        {
-            auto lsqr = getNextToken();
-            auto expr = expression();
-            expectToken(TokenType::R_SQR, "Expected ']' after array subscript");
-            auto rsqr = getNextToken();
+        auto itr = peekNextToken();
 
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(node);
-            exprNode->children.push_back(std::make_shared<Node>(*lsqr));
-            exprNode->children.push_back(expr);
-            exprNode->children.push_back(std::make_shared<Node>(*rsqr));
-            node = exprNode;
-        }
-        // Function call
-        else if (matchToken(TokenType::L_BR))
-        {
-            auto lbr = getNextToken();
-
-            if (matchToken(TokenType::R_BR))
-            {
-                auto rbr = getNextToken();
-                auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-                exprNode->children.push_back(node);
-                exprNode->children.push_back(std::make_shared<Node>(*lbr));
-                exprNode->children.push_back(std::make_shared<Node>(*rbr));
-                node = exprNode;
-            }
-            else
-            {
-                auto argList = argumentExpressionList();
-                expectToken(TokenType::R_BR, "Expected ')' after argument list");
-                auto rbr = getNextToken();
-
-                auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-                exprNode->children.push_back(node);
-                exprNode->children.push_back(std::make_shared<Node>(*lbr));
-                exprNode->children.push_back(argList);
-                exprNode->children.push_back(std::make_shared<Node>(*rbr));
-                node = exprNode;
-            }
-        }
-        // Member access
-        else if (matchToken(TokenType::DOT))
-        {
-            auto dot = getNextToken();
-            expectToken(TokenType::ID, "Expected identifier after '.'");
-            auto id = getNextToken();
-
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(node);
-            exprNode->children.push_back(std::make_shared<Node>(*dot));
-            exprNode->children.push_back(std::make_shared<Node>(*id));
-            node = exprNode;
-        }
-        // Pointer member access
-        else if (matchToken(TokenType::ARRORW))
-        {
-            auto arrow = getNextToken();
-            expectToken(TokenType::ID, "Expected identifier after '->'");
-            auto id = getNextToken();
-
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(node);
-            exprNode->children.push_back(std::make_shared<Node>(*arrow));
-            exprNode->children.push_back(std::make_shared<Node>(*id));
-            node = exprNode;
-        }
-        // Postfix increment/decrement
-        else if (matchToken(TokenType::INC) || matchToken(TokenType::DEC))
-        {
-            auto op = getNextToken();
-            auto exprNode = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-            exprNode->children.push_back(node);
-            exprNode->children.push_back(std::make_shared<Node>(*op));
-            node = exprNode;
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::argumentExpressionList()
-{
-    auto node = std::make_shared<Node>(TokenType::PARAMETER_LIST);
-
-    node->children.push_back(assignmentExpression());
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-        node->children.push_back(assignmentExpression());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::primaryExpression()
-{
-    if (matchToken(TokenType::ID))
-    {
-        auto token = getNextToken();
-        return std::make_shared<Node>(*token);
-    }
-
-    if (matchToken(TokenType::CONSTANT))
-    {
-        return constant();
-    }
-
-    if (matchToken(TokenType::STRING_LITERAL))
-    {
-        return stringLiteral();
-    }
-
-    if (matchToken(TokenType::L_BR))
-    {
-        auto lbr = getNextToken();
-        auto expr = expression();
-        expectToken(TokenType::R_BR, "Expected ')' after expression");
-        auto rbr = getNextToken();
-
-        auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-        node->children.push_back(std::make_shared<Node>(*lbr));
-        node->children.push_back(expr);
-        node->children.push_back(std::make_shared<Node>(*rbr));
-        return node;
-    }
-
-    loggedError.addError(lineNo, "Expected primary expression");
-    return std::make_shared<Node>(TokenType::END);
-}
-
-std::shared_ptr<Node> AST::constant()
-{
-    if (matchToken(TokenType::CONSTANT))
-    {
-        auto token = getNextToken();
-        return std::make_shared<Node>(*token);
-    }
-
-    loggedError.addError(lineNo, "Expected constant");
-    return std::make_shared<Node>(TokenType::CONSTANT);
-}
-
-std::shared_ptr<Node> AST::stringLiteral()
-{
-    if (matchToken(TokenType::STRING_LITERAL))
-    {
-        auto token = getNextToken();
-        return std::make_shared<Node>(*token);
-    }
-
-    loggedError.addError(lineNo, "Expected string literal");
-    return std::make_shared<Node>(TokenType::STRING_LITERAL);
-}
-
-std::shared_ptr<Node> AST::genericSelection()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    // GENERIC token would need to be added to scanner
-    // For now, skip implementation
-    return node;
-}
-
-std::shared_ptr<Node> AST::genericAssocList()
-{
-    auto node = std::make_shared<Node>(TokenType::PARAMETER_LIST);
-    node->children.push_back(genericAssociation());
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-        node->children.push_back(genericAssociation());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::genericAssociation()
-{
-    auto node = std::make_shared<Node>(TokenType::PARAMETER_DECLARATION);
-
-    if (matchToken(TokenType::DEFAULT))
-    {
-        auto defToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*defToken));
-    }
-    else
-    {
-        node->children.push_back(parseTypeName());
-    }
-
-    expectToken(TokenType::COLON, "Expected ':' in generic association");
-    auto colon = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*colon));
-    node->children.push_back(assignmentExpression());
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::constantExpression()
-{
-    return conditionalExpression();
-}
-
-// Declaration parsing
-std::shared_ptr<Node> AST::declaration()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-
-    if (matchToken(TokenType::STATIC) && peekNextToken()->lexeme == "_" &&
-        std::next(peekNextToken()) != symbolTable.end() &&
-        std::next(peekNextToken())->lexeme == "Assert")
-    {
-        return staticAssertDeclaration();
-    }
-
-    node->children.push_back(declarationSpecifiers());
-
-    if (matchToken(TokenType::SEMI_COLON))
-    {
-        auto semi = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*semi));
-        return node;
-    }
-
-    node->children.push_back(initDeclaratorList());
-    expectToken(TokenType::SEMI_COLON, "Expected ';' after declaration");
-    auto semi = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*semi));
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::declarationSpecifiers()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-
-    while (true)
-    {
-        auto token = peekNextToken();
-        if (token == symbolTable.end())
+        if (itr->type == TokenType::END)
             break;
 
-        bool matched = false;
-
-        if (storageClassSpecifier(token))
+        if (itr->type == TokenType::INCLUDE)
         {
-            node->children.push_back(storageClassSpecifier());
-            matched = true;
-        }
-        else if (typeSpecifier(token))
-        {
-            node->children.push_back(typeSpecifier());
-            matched = true;
-        }
-        else if (typeQualifier(token))
-        {
-            node->children.push_back(typeQualifier());
-            matched = true;
-        }
-        else if (isTypeName(token->lexeme))
-        {
-            auto typedefToken = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*typedefToken));
-            matched = true;
-        }
-
-        if (!matched)
-            break;
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::storageClassSpecifier()
-{
-    auto token = getNextToken();
-    if (storageClassSpecifier(token))
-    {
-        if (token->type == TokenType::TYPEDEF)
-        {
-            // Track typedef names
-            // This would need more sophisticated tracking
-        }
-        return std::make_shared<Node>(*token);
-    }
-
-    loggedError.addError(lineNo, "Expected storage class specifier");
-    return std::make_shared<Node>(TokenType::TYPEDEF);
-}
-
-std::shared_ptr<Node> AST::typeSpecifier()
-{
-    auto token = peekNextToken();
-
-    if (token->type == TokenType::STRUCT || token->type == TokenType::UNION)
-    {
-        return structOrUnionSpecifier();
-    }
-
-    if (token->type == TokenType::ENUM)
-    {
-        return enumSpecifier();
-    }
-
-    if (typeSpecifier(token))
-    {
-        token = getNextToken();
-        return std::make_shared<Node>(*token);
-    }
-
-    if (isTypeName(token->lexeme))
-    {
-        token = getNextToken();
-        return std::make_shared<Node>(*token);
-    }
-
-    loggedError.addError(lineNo, "Expected type specifier");
-    return std::make_shared<Node>(TokenType::INT_TYPE);
-}
-
-std::shared_ptr<Node> AST::typeQualifier()
-{
-    auto token = getNextToken();
-    if (typeQualifier(token))
-    {
-        return std::make_shared<Node>(*token);
-    }
-
-    loggedError.addError(lineNo, "Expected type qualifier");
-    return std::make_shared<Node>(TokenType::CONST);
-}
-
-std::shared_ptr<Node> AST::functionSpecifier()
-{
-    auto token = peekNextToken();
-    // Note: INLINE and NORETURN would need to be added to TokenType
-    // For now, return a placeholder
-    if (token != symbolTable.end())
-    {
-        token = getNextToken();
-        return std::make_shared<Node>(*token);
-    }
-
-    loggedError.addError(lineNo, "Expected function specifier");
-    return std::make_shared<Node>(TokenType::VOID);
-}
-
-std::shared_ptr<Node> AST::alignmentSpecifier()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-    // ALIGNAS would need to be added to scanner
-    return node;
-}
-
-std::shared_ptr<Node> AST::initDeclaratorList()
-{
-    auto node = std::make_shared<Node>(TokenType::INIT_DECLARATOR);
-
-    node->children.push_back(initDeclarator());
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-        node->children.push_back(initDeclarator());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::initDeclarator()
-{
-    auto node = std::make_shared<Node>(TokenType::INIT_DECLARATOR);
-
-    node->children.push_back(declarator());
-
-    if (matchToken(TokenType::ASSIGN))
-    {
-        auto assign = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*assign));
-        node->children.push_back(initializer());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::declarator()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATOR);
-
-    if (matchToken(TokenType::MUL))
-    {
-        node->children.push_back(pointer());
-    }
-
-    node->children.push_back(directDeclarator());
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::directDeclarator()
-{
-    auto node = std::make_shared<Node>(TokenType::DIRECT_DECLARATOR);
-
-    if (matchToken(TokenType::ID))
-    {
-        auto id = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*id));
-    }
-    else if (matchToken(TokenType::L_BR))
-    {
-        auto lbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lbr));
-        node->children.push_back(declarator());
-        expectToken(TokenType::R_BR, "Expected ')' after declarator");
-        auto rbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rbr));
-    }
-    else
-    {
-        loggedError.addError(lineNo, "Expected identifier or '(' in direct declarator");
-        return node;
-    }
-
-    // Parse array/function suffixes
-    while (true)
-    {
-        // Array declarator
-        if (matchToken(TokenType::L_SQR))
-        {
-            auto lsqr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*lsqr));
-
-            if (matchToken(TokenType::R_SQR))
-            {
-                auto rsqr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rsqr));
-            }
-            else if (matchToken(TokenType::STATIC))
-            {
-                auto stat = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*stat));
-
-                if (typeQualifier(peekNextToken()))
-                {
-                    node->children.push_back(typeQualifierList());
-                }
-
-                node->children.push_back(assignmentExpression());
-                expectToken(TokenType::R_SQR, "Expected ']'");
-                auto rsqr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rsqr));
-            }
-            else if (typeQualifier(peekNextToken()))
-            {
-                node->children.push_back(typeQualifierList());
-
-                if (matchToken(TokenType::STATIC))
-                {
-                    auto stat = getNextToken();
-                    node->children.push_back(std::make_shared<Node>(*stat));
-                    node->children.push_back(assignmentExpression());
-                }
-                else if (matchToken(TokenType::MUL))
-                {
-                    auto mul = getNextToken();
-                    node->children.push_back(std::make_shared<Node>(*mul));
-                }
-                else
-                {
-                    node->children.push_back(assignmentExpression());
-                }
-
-                expectToken(TokenType::R_SQR, "Expected ']'");
-                auto rsqr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rsqr));
-            }
-            else
-            {
-                node->children.push_back(assignmentExpression());
-                expectToken(TokenType::R_SQR, "Expected ']'");
-                auto rsqr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rsqr));
-            }
-        }
-        // Function declarator
-        else if (matchToken(TokenType::L_BR))
-        {
-            auto lbr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*lbr));
-
-            if (matchToken(TokenType::R_BR))
-            {
-                auto rbr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rbr));
-            }
-            else if (matchToken(TokenType::ID))
-            {
-                // Old style (K&R) parameter list
-                node->children.push_back(identifierList());
-                expectToken(TokenType::R_BR, "Expected ')'");
-                auto rbr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rbr));
-            }
-            else
-            {
-                node->children.push_back(parameterTypeList());
-                expectToken(TokenType::R_BR, "Expected ')'");
-                auto rbr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rbr));
-            }
+            getNextToken(); // consume INCLUDE token
+            root->children.push_back(includeStmt());
         }
         else
         {
-            break;
+            // Parse external declaration (function definition or declaration)
+            auto extDecl = externalDeclaration();
+            if (extDecl && !extDecl->children.empty())
+                root->children.push_back(extDecl);
+            else if (!extDecl)
+                break; // End of file
         }
     }
 
-    return node;
+    return root;
 }
-
-std::shared_ptr<Node> AST::pointer()
-{
-    auto node = std::make_shared<Node>(TokenType::POINTER);
-
-    expectToken(TokenType::MUL, "Expected '*' in pointer");
-    auto mul = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*mul));
-
-    if (typeQualifier(peekNextToken()))
-    {
-        node->children.push_back(typeQualifierList());
-    }
-
-    if (matchToken(TokenType::MUL))
-    {
-        node->children.push_back(pointer());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::typeQualifierList()
-{
-    auto node = std::make_shared<Node>(TokenType::TYPE_QUALIFIER_LIST);
-
-    while (typeQualifier(peekNextToken()))
-    {
-        node->children.push_back(typeQualifier());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::parameterTypeList()
-{
-    auto node = std::make_shared<Node>(TokenType::PARAMETER_TYPE_LIST);
-
-    node->children.push_back(parameterList());
-
-    if (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-        expectToken(TokenType::ELLIPSIS, "Expected '...' after ','");
-        auto ellipsis = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*ellipsis));
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::parameterList()
-{
-    auto node = std::make_shared<Node>(TokenType::PARAMETER_LIST);
-
-    node->children.push_back(parameterDeclaration());
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-        node->children.push_back(parameterDeclaration());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::parameterDeclaration()
-{
-    auto node = std::make_shared<Node>(TokenType::PARAMETER_DECLARATION);
-
-    node->children.push_back(declarationSpecifiers());
-
-    if (matchToken(TokenType::ID) || matchToken(TokenType::MUL) || matchToken(TokenType::L_BR) || matchToken(TokenType::L_SQR))
-    {
-        auto token = peekNextToken();
-        if (token->type == TokenType::ID)
-        {
-            node->children.push_back(declarator());
-        }
-        else
-        {
-            node->children.push_back(abstractDeclarator());
-        }
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::identifierList()
-{
-    auto node = std::make_shared<Node>(TokenType::IDENTIFIER_LIST);
-
-    expectToken(TokenType::ID, "Expected identifier");
-    auto id = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*id));
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-        expectToken(TokenType::ID, "Expected identifier");
-        id = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*id));
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::parseTypeName()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-
-    node->children.push_back(specifierQualifierList());
-
-    if (matchToken(TokenType::MUL) || matchToken(TokenType::L_BR) || matchToken(TokenType::L_SQR))
-    {
-        node->children.push_back(abstractDeclarator());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::abstractDeclarator()
-{
-    auto node = std::make_shared<Node>(TokenType::ABSTRACT_DECLARATOR);
-
-    if (matchToken(TokenType::MUL))
-    {
-        node->children.push_back(pointer());
-
-        if (matchToken(TokenType::L_BR) || matchToken(TokenType::L_SQR))
-        {
-            node->children.push_back(directAbstractDeclarator());
-        }
-    }
-    else if (matchToken(TokenType::L_BR) || matchToken(TokenType::L_SQR))
-    {
-        node->children.push_back(directAbstractDeclarator());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::directAbstractDeclarator()
-{
-    auto node = std::make_shared<Node>(TokenType::DIRECT_ABSTRACT_DECLARATOR);
-
-    if (matchToken(TokenType::L_BR))
-    {
-        auto lbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lbr));
-
-        if (matchToken(TokenType::R_BR))
-        {
-            auto rbr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*rbr));
-        }
-        else
-        {
-            node->children.push_back(abstractDeclarator());
-            expectToken(TokenType::R_BR, "Expected ')'");
-            auto rbr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*rbr));
-        }
-    }
-    else if (matchToken(TokenType::L_SQR))
-    {
-        auto lsqr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lsqr));
-
-        if (matchToken(TokenType::R_SQR))
-        {
-            auto rsqr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*rsqr));
-        }
-        else if (matchToken(TokenType::MUL))
-        {
-            auto mul = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*mul));
-            expectToken(TokenType::R_SQR, "Expected ']'");
-            auto rsqr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*rsqr));
-        }
-        else
-        {
-            // Handle array size specifications
-            if (matchToken(TokenType::STATIC))
-            {
-                auto stat = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*stat));
-
-                if (typeQualifier(peekNextToken()))
-                {
-                    node->children.push_back(typeQualifierList());
-                }
-
-                node->children.push_back(assignmentExpression());
-            }
-            else if (typeQualifier(peekNextToken()))
-            {
-                node->children.push_back(typeQualifierList());
-
-                if (matchToken(TokenType::STATIC))
-                {
-                    auto stat = getNextToken();
-                    node->children.push_back(std::make_shared<Node>(*stat));
-                    node->children.push_back(assignmentExpression());
-                }
-                else if (matchToken(TokenType::MUL))
-                {
-                    auto mul = getNextToken();
-                    node->children.push_back(std::make_shared<Node>(*mul));
-                }
-                else
-                {
-                    node->children.push_back(assignmentExpression());
-                }
-            }
-            else
-            {
-                node->children.push_back(assignmentExpression());
-            }
-
-            expectToken(TokenType::R_SQR, "Expected ']'");
-            auto rsqr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*rsqr));
-        }
-    }
-
-    // Parse additional array/function suffixes
-    while (true)
-    {
-        if (matchToken(TokenType::L_SQR))
-        {
-            auto lsqr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*lsqr));
-
-            if (matchToken(TokenType::R_SQR))
-            {
-                auto rsqr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rsqr));
-            }
-            else if (matchToken(TokenType::MUL))
-            {
-                auto mul = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*mul));
-                expectToken(TokenType::R_SQR, "Expected ']'");
-                auto rsqr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rsqr));
-            }
-            else
-            {
-                node->children.push_back(assignmentExpression());
-                expectToken(TokenType::R_SQR, "Expected ']'");
-                auto rsqr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rsqr));
-            }
-        }
-        else if (matchToken(TokenType::L_BR))
-        {
-            auto lbr = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*lbr));
-
-            if (matchToken(TokenType::R_BR))
-            {
-                auto rbr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rbr));
-            }
-            else
-            {
-                node->children.push_back(parameterTypeList());
-                expectToken(TokenType::R_BR, "Expected ')'");
-                auto rbr = getNextToken();
-                node->children.push_back(std::make_shared<Node>(*rbr));
-            }
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::specifierQualifierList()
-{
-    auto node = std::make_shared<Node>(TokenType::SPECIFIER_QUALIFIER_LIST);
-
-    while (typeSpecifier(peekNextToken()) || typeQualifier(peekNextToken()))
-    {
-        auto token = peekNextToken();
-
-        if (typeSpecifier(token))
-        {
-            node->children.push_back(typeSpecifier());
-        }
-        else if (typeQualifier(token))
-        {
-            node->children.push_back(typeQualifier());
-        }
-    }
-
-    return node;
-}
-
-// Struct and Union
-std::shared_ptr<Node> AST::structOrUnionSpecifier()
-{
-    auto node = std::make_shared<Node>(TokenType::STRUCT_UNION_SPECIFIER);
-
-    node->children.push_back(structOrUnion());
-
-    if (matchToken(TokenType::ID))
-    {
-        auto id = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*id));
-    }
-
-    if (matchToken(TokenType::L_CUR))
-    {
-        auto lcur = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lcur));
-        node->children.push_back(structDeclarationList());
-        expectToken(TokenType::R_CUR, "Expected '}' after struct declaration list");
-        auto rcur = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rcur));
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::structOrUnion()
-{
-    auto token = getNextToken();
-    return std::make_shared<Node>(*token);
-}
-
-std::shared_ptr<Node> AST::structDeclarationList()
-{
-    auto node = std::make_shared<Node>(TokenType::STRUCT_DECLARATION_LIST);
-
-    while (!matchToken(TokenType::R_CUR) && !matchToken(TokenType::END))
-    {
-        node->children.push_back(structDeclaration());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::structDeclaration()
-{
-    auto node = std::make_shared<Node>(TokenType::STRUCT_DECLARATION);
-
-    // Check for static_assert
-    if (matchToken(TokenType::STATIC) && peekNextToken()->lexeme == "_" &&
-        std::next(peekNextToken()) != symbolTable.end() &&
-        std::next(peekNextToken())->lexeme == "Assert")
-    {
-        return staticAssertDeclaration();
-    }
-
-    node->children.push_back(specifierQualifierList());
-
-    if (matchToken(TokenType::SEMI_COLON))
-    {
-        auto semi = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*semi));
-        return node;
-    }
-
-    node->children.push_back(structDeclaratorList());
-    expectToken(TokenType::SEMI_COLON, "Expected ';' after struct declarator");
-    auto semi = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*semi));
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::structDeclaratorList()
-{
-    auto node = std::make_shared<Node>(TokenType::STRUCT_DECLARATOR_LIST);
-
-    node->children.push_back(structDeclarator());
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-        node->children.push_back(structDeclarator());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::structDeclarator()
-{
-    auto node = std::make_shared<Node>(TokenType::STRUCT_DECLARATOR);
-
-    if (matchToken(TokenType::COLON))
-    {
-        auto colon = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*colon));
-        node->children.push_back(constantExpression());
-    }
-    else
-    {
-        node->children.push_back(declarator());
-
-        if (matchToken(TokenType::COLON))
-        {
-            auto colon = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*colon));
-            node->children.push_back(constantExpression());
-        }
-    }
-
-    return node;
-}
-
-// Enum
-std::shared_ptr<Node> AST::enumSpecifier()
-{
-    auto node = std::make_shared<Node>(TokenType::ENUM_SPECIFIER);
-
-    expectToken(TokenType::ENUM, "Expected 'enum'");
-    auto enumToken = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*enumToken));
-
-    if (matchToken(TokenType::ID))
-    {
-        auto id = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*id));
-    }
-
-    if (matchToken(TokenType::L_CUR))
-    {
-        auto lcur = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lcur));
-        node->children.push_back(enumeratorList());
-
-        if (matchToken(TokenType::COMMA))
-        {
-            auto comma = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*comma));
-        }
-
-        expectToken(TokenType::R_CUR, "Expected '}' after enumerator list");
-        auto rcur = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rcur));
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::enumeratorList()
-{
-    auto node = std::make_shared<Node>(TokenType::ENUMERATOR_LIST);
-
-    node->children.push_back(enumerator());
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-
-        if (matchToken(TokenType::ID))
-        {
-            node->children.push_back(enumerator());
-        }
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::enumerator()
-{
-    auto node = std::make_shared<Node>(TokenType::ENUMERATOR);
-
-    expectToken(TokenType::ID, "Expected identifier in enumerator");
-    auto id = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*id));
-
-    if (matchToken(TokenType::ASSIGN))
-    {
-        auto assign = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*assign));
-        node->children.push_back(constantExpression());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::enumerationConstant()
-{
-    if (matchToken(TokenType::ID))
-    {
-        auto token = getNextToken();
-        return std::make_shared<Node>(*token);
-    }
-
-    loggedError.addError(lineNo, "Expected enumeration constant");
-    return std::make_shared<Node>(TokenType::ID);
-}
-
-// Initializer
-std::shared_ptr<Node> AST::initializer()
-{
-    auto node = std::make_shared<Node>(TokenType::INITIALIZER);
-
-    if (matchToken(TokenType::L_CUR))
-    {
-        auto lcur = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lcur));
-        node->children.push_back(initializerList());
-
-        if (matchToken(TokenType::COMMA))
-        {
-            auto comma = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*comma));
-        }
-
-        expectToken(TokenType::R_CUR, "Expected '}' after initializer list");
-        auto rcur = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rcur));
-    }
-    else
-    {
-        node->children.push_back(assignmentExpression());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::initializerList()
-{
-    auto node = std::make_shared<Node>(TokenType::INITIALIZER);
-
-    if (matchToken(TokenType::L_SQR) || matchToken(TokenType::DOT))
-    {
-        node->children.push_back(designation());
-    }
-
-    node->children.push_back(initializer());
-
-    while (matchToken(TokenType::COMMA))
-    {
-        auto comma = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*comma));
-
-        if (matchToken(TokenType::L_SQR) || matchToken(TokenType::DOT))
-        {
-            node->children.push_back(designation());
-        }
-
-        node->children.push_back(initializer());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::designation()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    node->children.push_back(designatorList());
-    expectToken(TokenType::ASSIGN, "Expected '=' after designator");
-    auto assign = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*assign));
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::designatorList()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    node->children.push_back(designator());
-
-    while (matchToken(TokenType::L_SQR) || matchToken(TokenType::DOT))
-    {
-        node->children.push_back(designator());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::designator()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    if (matchToken(TokenType::L_SQR))
-    {
-        auto lsqr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lsqr));
-        node->children.push_back(constantExpression());
-        expectToken(TokenType::R_SQR, "Expected ']'");
-        auto rsqr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rsqr));
-    }
-    else if (matchToken(TokenType::DOT))
-    {
-        auto dot = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*dot));
-        expectToken(TokenType::ID, "Expected identifier after '.'");
-        auto id = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*id));
-    }
-
-    return node;
-}
-
-// Statement parsing
-std::shared_ptr<Node> AST::statement()
-{
-    auto token = peekNextToken();
-
-    if (token->type == TokenType::ID && std::next(token) != symbolTable.end() &&
-        std::next(token)->type == TokenType::COLON)
-    {
-        return labeledStatement();
-    }
-    else if (token->type == TokenType::CASE)
-    {
-        return labeledStatement();
-    }
-    else if (token->type == TokenType::DEFAULT)
-    {
-        return labeledStatement();
-    }
-    else if (token->type == TokenType::L_CUR)
-    {
-        return compoundStatement();
-    }
-    else if (token->type == TokenType::SEMI_COLON)
-    {
-        return expressionStatement();
-    }
-    else if (token->type == TokenType::IF || token->type == TokenType::SWITCH)
-    {
-        return selectionStatement();
-    }
-    else if (token->type == TokenType::WHILE || token->type == TokenType::DO || token->type == TokenType::FOR)
-    {
-        return iterationStatement();
-    }
-    else if ((token->lexeme == "goto") || token->type == TokenType::CONT ||
-             token->type == TokenType::BRK || token->type == TokenType::RETURN)
-    {
-        return jumpStatement();
-    }
-    else
-    {
-        return expressionStatement();
-    }
-}
-
-std::shared_ptr<Node> AST::labeledStatement()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    auto token = peekNextToken();
-
-    if (token->type == TokenType::ID)
-    {
-        auto id = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*id));
-        expectToken(TokenType::COLON, "Expected ':' after label");
-        auto colon = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*colon));
-    }
-    else if (token->type == TokenType::CASE)
-    {
-        auto caseToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*caseToken));
-        node->children.push_back(constantExpression());
-        expectToken(TokenType::COLON, "Expected ':' after case");
-        auto colon = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*colon));
-    }
-    else if (token->type == TokenType::DEFAULT)
-    {
-        auto defToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*defToken));
-        expectToken(TokenType::COLON, "Expected ':' after default");
-        auto colon = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*colon));
-    }
-
-    node->children.push_back(statement());
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::compoundStatement()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    expectToken(TokenType::L_CUR, "Expected '{'");
-    auto lcur = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*lcur));
-
-    if (!matchToken(TokenType::R_CUR))
-    {
-        node->children.push_back(blockItemList());
-    }
-
-    expectToken(TokenType::R_CUR, "Expected '}'");
-    auto rcur = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*rcur));
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::blockItemList()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-
-    node->children.push_back(blockItem());
-
-    while (!matchToken(TokenType::R_CUR) && !matchToken(TokenType::END))
-    {
-        node->children.push_back(blockItem());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::blockItem()
-{
-    auto token = peekNextToken();
-
-    if (storageClassSpecifier(token) || typeSpecifier(token) || typeQualifier(token) ||
-        isTypeName(token->lexeme))
-    {
-        return declaration();
-    }
-    else
-    {
-        return statement();
-    }
-}
-
-std::shared_ptr<Node> AST::expressionStatement()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    if (matchToken(TokenType::SEMI_COLON))
-    {
-        auto semi = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*semi));
-        return node;
-    }
-
-    node->children.push_back(expression());
-    expectToken(TokenType::SEMI_COLON, "Expected ';' after expression");
-    auto semi = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*semi));
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::selectionStatement()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    auto token = peekNextToken();
-
-    if (token->type == TokenType::IF)
-    {
-        auto ifToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*ifToken));
-        expectToken(TokenType::L_BR, "Expected '(' after 'if'");
-        auto lbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lbr));
-        node->children.push_back(expression());
-        expectToken(TokenType::R_BR, "Expected ')' after expression");
-        auto rbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rbr));
-        node->children.push_back(statement());
-
-        if (matchToken(TokenType::ELSE))
-        {
-            auto elseToken = getNextToken();
-            node->children.push_back(std::make_shared<Node>(*elseToken));
-            node->children.push_back(statement());
-        }
-    }
-    else if (token->type == TokenType::SWITCH)
-    {
-        auto switchToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*switchToken));
-        expectToken(TokenType::L_BR, "Expected '(' after 'switch'");
-        auto lbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lbr));
-        node->children.push_back(expression());
-        expectToken(TokenType::R_BR, "Expected ')' after expression");
-        auto rbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rbr));
-        node->children.push_back(statement());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::iterationStatement()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    auto token = peekNextToken();
-
-    if (token->type == TokenType::WHILE)
-    {
-        auto whileToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*whileToken));
-        expectToken(TokenType::L_BR, "Expected '(' after 'while'");
-        auto lbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lbr));
-        node->children.push_back(expression());
-        expectToken(TokenType::R_BR, "Expected ')' after expression");
-        auto rbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rbr));
-        node->children.push_back(statement());
-    }
-    else if (token->type == TokenType::DO)
-    {
-        auto doToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*doToken));
-        node->children.push_back(statement());
-        expectToken(TokenType::WHILE, "Expected 'while' after 'do'");
-        auto whileToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*whileToken));
-        expectToken(TokenType::L_BR, "Expected '(' after 'while'");
-        auto lbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lbr));
-        node->children.push_back(expression());
-        expectToken(TokenType::R_BR, "Expected ')' after expression");
-        auto rbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rbr));
-        expectToken(TokenType::SEMI_COLON, "Expected ';' after do-while");
-        auto semi = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*semi));
-    }
-    else if (token->type == TokenType::FOR)
-    {
-        auto forToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*forToken));
-        expectToken(TokenType::L_BR, "Expected '(' after 'for'");
-        auto lbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*lbr));
-
-        // Parse for loop initialization
-        if (storageClassSpecifier(peekNextToken()) || typeSpecifier(peekNextToken()) ||
-            typeQualifier(peekNextToken()) || isTypeName(peekNextToken()->lexeme))
-        {
-            node->children.push_back(declaration());
-        }
-        else
-        {
-            node->children.push_back(expressionStatement());
-        }
-
-        // Parse condition
-        node->children.push_back(expressionStatement());
-
-        // Parse increment (optional)
-        if (!matchToken(TokenType::R_BR))
-        {
-            node->children.push_back(expression());
-        }
-
-        expectToken(TokenType::R_BR, "Expected ')' after for loop");
-        auto rbr = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*rbr));
-        node->children.push_back(statement());
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::jumpStatement()
-{
-    auto node = std::make_shared<Node>(TokenType::ASSIGNMENT_EXP);
-
-    auto token = peekNextToken();
-
-    // Note: GOTO token type not available, checking by lexeme
-    if (token != symbolTable.end() && token->lexeme == "goto")
-    {
-        auto gotoToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*gotoToken));
-        expectToken(TokenType::ID, "Expected identifier after 'goto'");
-        auto id = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*id));
-        expectToken(TokenType::SEMI_COLON, "Expected ';'");
-        auto semi = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*semi));
-    }
-    else if (token->type == TokenType::CONT || token->type == TokenType::BRK)
-    {
-        auto token = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*token));
-        expectToken(TokenType::SEMI_COLON, "Expected ';'");
-        auto semi = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*semi));
-    }
-    else if (token->type == TokenType::RETURN)
-    {
-        auto returnToken = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*returnToken));
-
-        if (!matchToken(TokenType::SEMI_COLON))
-        {
-            node->children.push_back(expression());
-        }
-
-        expectToken(TokenType::SEMI_COLON, "Expected ';' after return");
-        auto semi = getNextToken();
-        node->children.push_back(std::make_shared<Node>(*semi));
-    }
-
-    return node;
-}
-
-std::shared_ptr<Node> AST::staticAssertDeclaration()
-{
-    auto node = std::make_shared<Node>(TokenType::DECLARATION_SPECIFIERS);
-
-    // STATIC_ASSERT would need to be added to scanner
-    // For now, basic implementation
-    expectToken(TokenType::STATIC, "Expected 'static'");
-    auto stat = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*stat));
-
-    expectToken(TokenType::L_BR, "Expected '('");
-    auto lbr = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*lbr));
-
-    node->children.push_back(constantExpression());
-
-    expectToken(TokenType::COMMA, "Expected ','");
-    auto comma = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*comma));
-
-    expectToken(TokenType::STRING_LITERAL, "Expected string literal");
-    auto str = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*str));
-
-    expectToken(TokenType::R_BR, "Expected ')'");
-    auto rbr = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*rbr));
-
-    expectToken(TokenType::SEMI_COLON, "Expected ';'");
-    auto semi = getNextToken();
-    node->children.push_back(std::make_shared<Node>(*semi));
-
-    return node;
-}
-
-// Include statement (existing implementation)
 std::shared_ptr<Node> AST::includeStmt()
 {
     auto itr = getNextToken();
@@ -2088,6 +44,7 @@ std::shared_ptr<Node> AST::includeStmt()
     auto tempType = itr->type;
     if (itr->type == TokenType::DOUBLE_QUOTE || itr->type == TokenType::LT)
         ret->children.push_back(std::make_shared<Node>(std::move(*itr)));
+
     else
     {
         loggedError.addError(lineNo, INCLUD_ERROR);
@@ -2104,8 +61,7 @@ std::shared_ptr<Node> AST::includeStmt()
     }
     itr = getNextToken();
 
-    if ((itr->type == TokenType::DOUBLE_QUOTE && tempType == TokenType::DOUBLE_QUOTE) ||
-        (itr->type == TokenType::GT && tempType == TokenType::LT))
+    if ((itr->type == TokenType::DOUBLE_QUOTE && tempType == TokenType::DOUBLE_QUOTE) || (itr->type == TokenType::GT && tempType == TokenType::LT))
         ret->children.push_back(std::make_shared<Node>(std::move(*itr)));
     else
     {
@@ -2115,7 +71,2137 @@ std::shared_ptr<Node> AST::includeStmt()
     return ret;
 }
 
-// Print functions (existing implementation)
+std::shared_ptr<Node> AST::structUnionSpecifier(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::STRUCT_UNION_SPECIFIER);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    auto itr = getNextToken();
+    if (itr->type == TokenType::ID)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*itr)));
+        itr = peekNextToken();
+        if (itr->type == TokenType::L_CUR)
+        {
+            itr = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*itr)));
+            itr = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*structDeclarationList(itr))));
+            itr = getNextToken();
+            if (itr->type != TokenType::R_CUR)
+            {
+                loggedError.addError(lineNo, "Missing right curly bracket");
+                ungetToken();
+            }
+            else
+                ret->children.push_back(std::make_shared<Node>(std::move(*(itr))));
+        }
+    }
+    else if (itr->type == TokenType::L_CUR)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*itr)));
+
+        itr = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*structDeclarationList(itr))));
+        itr = getNextToken();
+        if (itr->type != TokenType::R_CUR)
+        {
+            loggedError.addError(lineNo, "Missing right curly bracket");
+            ungetToken();
+        }
+        else
+            ret->children.push_back(std::make_shared<Node>(std::move(*(itr))));
+    }
+    else
+        loggedError.addError(lineNo, STRUCT_UNION_ERROR);
+    return ret;
+}
+std::shared_ptr<Node> AST::structDeclarationList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::STRUCT_DECLARATION_LIST);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    while (1)
+    {
+        if (peekNextToken()->type == TokenType::R_CUR)
+            break;
+        begin = getNextToken();
+        ret->children.push_back(structDeclaration(begin));
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::structDeclaration(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::STRUCT_DECLARATION);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    
+    // Check for static assertion
+    if (begin->type == TokenType::STATIC_ASSERT)
+    {
+        ret->children.push_back(staticAssertDeclaration(begin));
+        return ret;
+    }
+    
+    ret->children.push_back(specifierQualifierList(begin));
+    begin = peekNextToken();
+    
+    // Check if we have declarators or if this is an anonymous struct/union
+    if (begin->type != TokenType::SEMI_COLON)
+    {
+        begin = getNextToken();
+        ret->children.push_back(structDeclaratorList(begin));
+        begin = getNextToken();
+    }
+    else
+    {
+        begin = getNextToken();
+    }
+    
+    if (begin->type == TokenType::SEMI_COLON)
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    else
+        loggedError.addGrammarError(lineNo, "Expected ';' after struct declaration");
+    return ret;
+}
+std::shared_ptr<Node> AST::structDeclaratorList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::STRUCT_DECLARATION_LIST);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+
+    ret->children.push_back(structDeclarator(begin));
+
+    while (peekNextToken()->type == TokenType::COMMA)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(structDeclarator(begin));
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::structDeclarator(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::STRUCT_DECLARATOR);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    if (begin->type != TokenType::COLON)
+    {
+        ret->children.push_back(declarator(begin));
+        begin = peekNextToken();
+        if (begin->type == TokenType::COLON)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            if (peekNextToken()->type == TokenType::CONSTANT)
+            {
+                begin = getNextToken();
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+        }
+    }
+    else
+    {
+        if (begin->type == TokenType::COLON)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = peekNextToken();
+            if (begin->type == TokenType::CONSTANT)
+            {
+                begin = getNextToken();
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+        }
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::declarator(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DECLARATOR);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    if (begin->type == TokenType::MUL)
+    {
+        ret->children.push_back(pointer(begin));
+        begin = getNextToken();
+    }
+    ret->children.push_back(directDeclarator(begin));
+    return ret;
+}
+std::shared_ptr<Node> AST::directDeclarator(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DIRECT_DECLARATOR);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    if (begin->type == TokenType::ID || begin->type == TokenType::MAIN)
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    else if (begin->type == TokenType::L_BR)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(declarator(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::R_BR)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    }
+    while (peekNextToken()->type == TokenType::L_SQR || peekNextToken()->type == TokenType::L_BR)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        auto next = getNextToken();
+        if (begin->type == TokenType::L_SQR)
+        {
+            // Handle C11 array syntax: [ ], [ * ], [ STATIC ... ], [ type-qualifiers ... ]
+            if (next->type == TokenType::R_SQR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+            }
+            else if (next->type == TokenType::MUL)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+                next = getNextToken();
+                if (next->type == TokenType::R_SQR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+            }
+            else if (next->type == TokenType::STATIC)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+                next = getNextToken();
+                
+                // Check for optional type qualifier list after STATIC
+                if (typeQualifier(next))
+                {
+                    ret->children.push_back(typeQualifierList(next));
+                    next = getNextToken();
+                }
+                
+                // Now expect assignment expression
+                ret->children.push_back(assignmentExpression(next));
+                next = getNextToken();
+                if (next->type == TokenType::R_SQR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+            }
+            else if (typeQualifier(next))
+            {
+                ret->children.push_back(typeQualifierList(next));
+                next = getNextToken();
+                
+                // After type qualifiers, can be: *, STATIC expr, expr, or ]
+                if (next->type == TokenType::MUL)
+                {
+                    ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+                    next = getNextToken();
+                }
+                else if (next->type == TokenType::STATIC)
+                {
+                    ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+                    next = getNextToken();
+                    ret->children.push_back(assignmentExpression(next));
+                    next = getNextToken();
+                }
+                else if (next->type != TokenType::R_SQR)
+                {
+                    ret->children.push_back(assignmentExpression(next));
+                    next = getNextToken();
+                }
+                
+                if (next->type == TokenType::R_SQR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+            }
+            else
+            {
+                // Just an assignment expression
+                ret->children.push_back(assignmentExpression(next));
+                next = getNextToken();
+                if (next->type == TokenType::R_SQR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+            }
+        }
+        else if (begin->type == TokenType::L_BR)
+        {
+            if (next->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+
+            else if (next->type == TokenType::ID)
+                ret->children.push_back(identifierList(next));
+            else
+                ret->children.push_back(parameterTypeList(next));
+            next = getNextToken();
+            if (next->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+        }
+    }
+
+    return ret;
+}
+std::shared_ptr<Node> AST::identifierList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::IDENTIFIER_LIST);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::ID)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        while (peekNextToken()->type == TokenType::COMMA)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = peekNextToken();
+            if (begin->type == TokenType::ID)
+            {
+                begin = getNextToken();
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+        }
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::parameterTypeList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::PARAMETER_TYPE_LIST);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(parameterList(begin));
+    if (peekNextToken()->type == TokenType::COMMA)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        if (peekNextToken()->type == TokenType::ELLIPSIS)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::parameterList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::PARAMETER_LIST);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(parameterDeclaration(begin));
+    while (peekNextToken()->type == TokenType::COMMA)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(parameterDeclaration(begin));
+    }
+    return ret;
+}
+// Debugging
+std::shared_ptr<Node> AST::parameterDeclaration(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::PARAMETER_DECLARATION);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(declarationSpecifier(begin));
+    begin = peekNextToken();
+    if (begin->type == TokenType::MUL || begin->type == TokenType::ID || begin->type == TokenType::L_BR || begin->type == TokenType::L_SQR)
+    {
+        begin = getNextToken();
+        if (begin->type == TokenType::ID)
+            ret->children.push_back(declarator(begin));
+        else if (begin->type == TokenType::L_SQR)
+            ret->children.push_back(abstractDeclarator(begin));
+
+        else
+        {
+            auto itr = begin;
+            if (begin->type == TokenType::MUL)
+            {
+                auto type = itr->type;
+                while (type == TokenType::MUL || type == TokenType::CONST || type == TokenType::VOLATILE)
+                {
+                    appendList(symbolTable);
+                    itr = std::next(itr);
+                    type = itr->type;
+                }
+                if ((type != TokenType::L_BR && type != TokenType::ID && type != TokenType::L_SQR) || type == TokenType::L_SQR)
+                {
+                    ret->children.push_back(abstractDeclarator(begin));
+                    return ret;
+                }
+                if (type == TokenType::ID)
+                {
+                    ret->children.push_back(declarator(begin));
+                    return ret;
+                }
+            }
+
+            int bracketCount = 1;
+            bool isDeclarator = false;
+            for (; bracketCount != 0 && itr != symbolTable.end(); itr = std::next(itr))
+            {
+                appendList(symbolTable);
+                if (itr->type == TokenType::L_BR)
+                {
+                    bracketCount++;
+                    auto next = std::next(itr);
+
+                    if (next->type == TokenType::ID && std::next(next)->type == TokenType::R_BR)
+                    {
+
+                        isDeclarator = true;
+                        break;
+                    }
+                    if (std::next(itr)->type == TokenType::MUL && std::next(itr) != symbolTable.end())
+                    {
+                        auto type = std::next(itr)->type;
+                        itr = std::next(itr);
+                        while (type == TokenType::MUL || type == TokenType::CONST || type == TokenType::VOLATILE)
+                        {
+                            appendList(symbolTable);
+                            itr = std::next(itr);
+                            type = itr->type;
+                        }
+                        itr = std::prev(itr);
+                    }
+                }
+                else if (itr->type == TokenType::R_BR)
+                    bracketCount--;
+            }
+            if (isDeclarator)
+                ret->children.push_back(declarator(begin));
+            else
+                ret->children.push_back(abstractDeclarator(begin));
+        }
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::declarationSpecifier(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DECLARATION_SPECIFIERS);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    auto start = begin;
+    
+    // First token must be a declaration specifier
+    if (storageClassSpecifier(begin) || typeSpecifier(begin) || typeQualifier(begin) || 
+        functionSpecifier(begin) || isAlignmentSpecifier(begin) ||
+        (!begin->lexeme.empty() && isTypeName(begin->lexeme)))
+    {
+        // Handle first specifier
+        if (structUnion(begin))
+            ret->children.push_back(structUnionSpecifier(begin));
+        else if (begin->type == TokenType::ENUM)
+            ret->children.push_back(enumSpecifier(begin));
+        else if (isAlignmentSpecifier(begin))
+            ret->children.push_back(alignmentSpecifier(begin));
+        else if (begin->type == TokenType::ATOMIC && peekNextToken()->type == TokenType::L_BR)
+            ret->children.push_back(atomicTypeSpecifier(begin));
+        else
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        
+        // Parse additional specifiers
+        while (true)
+        {
+            begin = peekNextToken();
+            if (storageClassSpecifier(begin) || typeSpecifier(begin) || typeQualifier(begin) || 
+                functionSpecifier(begin) || isAlignmentSpecifier(begin) ||
+                (!begin->lexeme.empty() && isTypeName(begin->lexeme)))
+            {
+                begin = getNextToken();
+                if (structUnion(begin))
+                    ret->children.push_back(structUnionSpecifier(begin));
+                else if (begin->type == TokenType::ENUM)
+                    ret->children.push_back(enumSpecifier(begin));
+                else if (isAlignmentSpecifier(begin))
+                    ret->children.push_back(alignmentSpecifier(begin));
+                else if (begin->type == TokenType::ATOMIC && peekNextToken()->type == TokenType::L_BR)
+                    ret->children.push_back(atomicTypeSpecifier(begin));
+                else
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+            else
+                break;
+        }
+        
+        // Handle typedef name tracking
+        if (start->type == TokenType::TYPEDEF)
+        {
+            auto itr = currentToken;
+            while (itr->type != TokenType::ID && itr != symbolTable.end())
+            {
+                appendList(symbolTable);
+                itr = std::next(itr);
+            }
+            if (itr != symbolTable.end() && itr->type == TokenType::ID)
+                definedTypeNames.insert(itr->lexeme);
+        }
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::abstractDeclarator(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ABSTRACT_DECLARATOR);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::MUL)
+    {
+        ret->children.push_back(pointer(begin));
+        auto peeked = peekNextToken();
+        if (peeked->type == TokenType::L_BR || peeked->type == TokenType::L_SQR)
+        {
+            begin = getNextToken();
+            ret->children.push_back(directAbstractDeclarator(begin));
+        }
+    }
+    else if (begin->type == TokenType::L_SQR || begin->type == TokenType::L_BR)
+        ret->children.push_back(directAbstractDeclarator(begin));
+    return ret;
+}
+std::shared_ptr<Node> AST::initDeclarator(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::INIT_DECLARATOR);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(declarator(begin));
+    if (peekNextToken()->type == TokenType::ASSIGN)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(initializer(begin));
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::initializer(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::INITIALIZER);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::L_CUR)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(initializerList(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::COMMA)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+        }
+        if (begin->type == TokenType::R_CUR)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        else
+        {
+            loggedError.addError(lineNo, "Expected '}' in initializer");
+            ungetToken();
+        }
+    }
+    else
+    {
+        ret->children.push_back(assignmentExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::initializerList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::INITIALIZER_LIST);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    // Check for designation
+    if ((begin->type == TokenType::L_SQR) || (begin->type == TokenType::DOT))
+    {
+        ret->children.push_back(designation(begin));
+        begin = getNextToken();
+    }
+    ret->children.push_back(initializer(begin));
+
+    while (peekNextToken()->type == TokenType::COMMA && peekNextToken() != symbolTable.end())
+    {
+        auto next = peekNextToken();
+        if (std::next(next) != symbolTable.end() && std::next(next)->type == TokenType::R_CUR)
+            break;
+
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+
+        // Check for designation
+        if ((begin->type == TokenType::L_SQR) || (begin->type == TokenType::DOT))
+        {
+            ret->children.push_back(designation(begin));
+            begin = getNextToken();
+        }
+        ret->children.push_back(initializer(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::designation(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DESIGNATION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(designatorList(begin));
+    begin = getNextToken();
+    if (begin->type == TokenType::ASSIGN)
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    else
+    {
+        loggedError.addError(lineNo, "Expected '=' after designator list");
+        ungetToken();
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::designatorList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DESIGNATOR_LIST);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(designator(begin));
+
+    while (peekNextToken()->type == TokenType::L_SQR || peekNextToken()->type == TokenType::DOT)
+    {
+        begin = getNextToken();
+        ret->children.push_back(designator(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::designator(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DESIGNATOR);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::L_SQR)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(constantExpression(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::R_SQR)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    }
+    else if (begin->type == TokenType::DOT)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::ID)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        else
+            loggedError.addError(lineNo, "Expected identifier after '.'");
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::directAbstractDeclarator(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DIRECT_ABSTRACT_DECLARATOR);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    if (begin->type == TokenType::L_BR)
+    {
+
+        begin = getNextToken();
+        if (begin->type == TokenType::R_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+
+        else if (storageClassSpecifier(begin) || typeSpecifier(begin))
+        {
+            ret->children.push_back(parameterTypeList(begin));
+            begin = getNextToken();
+
+            if (begin->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else
+        {
+            ret->children.push_back(abstractDeclarator(begin));
+            begin = getNextToken();
+
+            if (begin->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+    }
+    else if (begin->type == TokenType::L_SQR)
+    {
+        begin = getNextToken();
+        
+        // Handle C11 array syntax
+        if (begin->type == TokenType::R_SQR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else if (begin->type == TokenType::MUL)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_SQR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else if (begin->type == TokenType::STATIC)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            
+            // Optional type qualifier list
+            if (typeQualifier(begin))
+            {
+                ret->children.push_back(typeQualifierList(begin));
+                begin = getNextToken();
+            }
+            
+            // Assignment expression
+            ret->children.push_back(assignmentExpression(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_SQR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else if (typeQualifier(begin))
+        {
+            ret->children.push_back(typeQualifierList(begin));
+            begin = getNextToken();
+            
+            if (begin->type == TokenType::MUL)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+            }
+            else if (begin->type == TokenType::STATIC)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                ret->children.push_back(assignmentExpression(begin));
+                begin = getNextToken();
+            }
+            else if (begin->type != TokenType::R_SQR)
+            {
+                ret->children.push_back(assignmentExpression(begin));
+                begin = getNextToken();
+            }
+            
+            if (begin->type == TokenType::R_SQR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else
+        {
+            // Just assignment expression
+            ret->children.push_back(assignmentExpression(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_SQR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+    }
+    while (1)
+    {
+        auto peeked = peekNextToken();
+        if (peeked->type == TokenType::L_BR)
+        {
+
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+
+            begin = getNextToken();
+            if (begin->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            else if (storageClassSpecifier(begin) || typeSpecifier(begin))
+            {
+                ret->children.push_back(parameterTypeList(begin));
+                begin = getNextToken();
+
+                if (begin->type == TokenType::R_BR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+        }
+        else if (peeked->type == TokenType::L_SQR)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+
+            // Handle C11 array syntax
+            if (begin->type == TokenType::R_SQR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+            else if (begin->type == TokenType::MUL)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                if (begin->type == TokenType::R_SQR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+            else if (begin->type == TokenType::STATIC)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                
+                if (typeQualifier(begin))
+                {
+                    ret->children.push_back(typeQualifierList(begin));
+                    begin = getNextToken();
+                }
+                
+                ret->children.push_back(assignmentExpression(begin));
+                begin = getNextToken();
+                if (begin->type == TokenType::R_SQR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+            else if (typeQualifier(begin))
+            {
+                ret->children.push_back(typeQualifierList(begin));
+                begin = getNextToken();
+                
+                if (begin->type == TokenType::MUL)
+                {
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                    begin = getNextToken();
+                }
+                else if (begin->type == TokenType::STATIC)
+                {
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                    begin = getNextToken();
+                    ret->children.push_back(assignmentExpression(begin));
+                    begin = getNextToken();
+                }
+                else if (begin->type != TokenType::R_SQR)
+                {
+                    ret->children.push_back(assignmentExpression(begin));
+                    begin = getNextToken();
+                }
+                
+                if (begin->type == TokenType::R_SQR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+            else
+            {
+                ret->children.push_back(assignmentExpression(begin));
+                begin = getNextToken();
+                if (begin->type == TokenType::R_SQR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+        }
+        else
+            break;
+    }
+
+    return ret;
+}
+std::shared_ptr<Node> AST::pointer(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::POINTER);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    if (begin->type == TokenType::MUL)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = peekNextToken();
+        if (begin->type == TokenType::MUL)
+        {
+            begin = getNextToken();
+            ret->children.push_back(pointer(begin));
+        }
+        else if (typeQualifier(begin))
+        {
+            begin = getNextToken();
+            ret->children.push_back(typeQualifierList(begin));
+            if (peekNextToken()->type == TokenType::MUL)
+            {
+                begin = getNextToken();
+                ret->children.push_back(pointer(begin));
+            }
+        }
+    }
+
+    return ret;
+}
+std::shared_ptr<Node> AST::typeQualifierList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::TYPE_QUALIFIER_LIST);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    while (typeQualifier(begin))
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+    }
+    ungetToken();
+    return ret;
+}
+std::shared_ptr<Node> AST::specifierQualifierList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::SPECIFIER_QUALIFIER_LIST);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    while (typeQualifier(begin) || typeSpecifier(begin))
+    {
+        if (structUnion(begin))
+            ret->children.push_back((structUnionSpecifier(begin)));
+        else if (begin->type == TokenType::ENUM)
+        {
+            ret->children.push_back(enumSpecifier(begin));
+        }
+        else
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+    }
+    ungetToken();
+    return ret;
+}
+std::shared_ptr<Node> AST::enumSpecifier(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ENUM_SPECIFIER);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    if (begin->type == TokenType::ENUM)
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    begin = getNextToken();
+    if (begin->type == TokenType::L_CUR)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(enumeratorList(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::R_CUR)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    }
+    if (begin->type == TokenType::ID)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = peekNextToken();
+        if (begin->type == TokenType::L_CUR)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(enumeratorList(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_CUR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::enumerator(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ENUMERATOR);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    if (begin->type == TokenType::ID)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = peekNextToken();
+        if (begin->type == TokenType::ASSIGN)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = peekNextToken();
+            if (begin->type == TokenType::CONSTANT)
+            {
+                begin = getNextToken();
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+        }
+    }
+    return ret;
+}
+std::shared_ptr<Node> AST::enumeratorList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ENUMERATOR_LIST);
+    std::shared_ptr<Node> ret;
+    ret = std::make_shared<Node>(std::move(stmt));
+    if (begin->type == TokenType::ID)
+    {
+        ret->children.push_back(enumerator(begin));
+        while (peekNextToken()->type == TokenType::COMMA)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = peekNextToken();
+            if (begin->type == TokenType::ID)
+            {
+                begin = getNextToken();
+                ret->children.push_back(enumerator(begin));
+            }
+        }
+    }
+    return ret;
+}
+// Declaration and function definition functions
+std::shared_ptr<Node> AST::declaration(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DECLARATION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    // Check for static assertion
+    if (begin->type == TokenType::STATIC_ASSERT)
+    {
+        ret->children.push_back(staticAssertDeclaration(begin));
+        return ret;
+    }
+
+    ret->children.push_back(declarationSpecifier(begin));
+
+    auto next = peekNextToken();
+    if (next->type != TokenType::SEMI_COLON)
+    {
+        begin = getNextToken();
+        ret->children.push_back(initDeclaratorList(begin));
+        begin = getNextToken();
+    }
+    else
+    {
+        begin = getNextToken();
+    }
+
+    if (begin->type == TokenType::SEMI_COLON)
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    else
+        loggedError.addGrammarError(lineNo, "Expected ';' after declaration");
+
+    return ret;
+}
+
+std::shared_ptr<Node> AST::initDeclaratorList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::INIT_DECLARATOR_LIST);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    ret->children.push_back(initDeclarator(begin));
+
+    while (peekNextToken()->type == TokenType::COMMA)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(initDeclarator(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::functionDefinition(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::FUNCTION_DEFINITION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    ret->children.push_back(declarationSpecifier(begin));
+    begin = getNextToken();
+    ret->children.push_back(declarator(begin));
+
+    // Check if there's a declaration list (old-style K&R C)
+    auto next = peekNextToken();
+    if (storageClassSpecifier(next) || typeSpecifier(next) || typeQualifier(next))
+    {
+        begin = getNextToken();
+        ret->children.push_back(declarationList(begin));
+        begin = getNextToken();
+    }
+    else
+    {
+        begin = getNextToken();
+    }
+
+    ret->children.push_back(compoundStatement(begin));
+    return ret;
+}
+
+std::shared_ptr<Node> AST::declarationList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::DECLARATION_LIST);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    ret->children.push_back(declaration(begin));
+
+    while (true)
+    {
+        auto next = peekNextToken();
+        if (storageClassSpecifier(next) || typeSpecifier(next) || typeQualifier(next))
+        {
+            begin = getNextToken();
+            ret->children.push_back(declaration(begin));
+        }
+        else
+            break;
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::externalDeclaration()
+{
+    Node stmt(TokenType::EXTERNAL_DECLARATION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    auto begin = getNextToken();
+
+    if (begin->type == TokenType::END)
+        return nullptr;
+
+    // Check if this is a function definition or declaration
+    // We need to look ahead to distinguish between them
+    auto saved = currentToken;
+
+    // Parse declaration specifiers (including C11 specifiers)
+    if (!storageClassSpecifier(begin) && !typeSpecifier(begin) && !typeQualifier(begin) &&
+        !functionSpecifier(begin) && !isAlignmentSpecifier(begin) &&
+        !(begin->type == TokenType::STATIC_ASSERT) &&
+        !(!begin->lexeme.empty() && isTypeName(begin->lexeme)))
+    {
+        loggedError.addGrammarError(lineNo, "Expected declaration or function definition");
+        return ret;
+    }
+
+    // Skip past declaration specifiers to find declarator
+    while (storageClassSpecifier(peekNextToken()) || typeSpecifier(peekNextToken()) ||
+           typeQualifier(peekNextToken()) || functionSpecifier(peekNextToken()) ||
+           isAlignmentSpecifier(peekNextToken()))
+    {
+        getNextToken();
+    }
+
+    // Skip past declarator to check what follows
+    int bracketDepth = 0;
+    bool foundCompound = false;
+    while (true)
+    {
+        auto tok = peekNextToken();
+        if (tok->type == TokenType::L_CUR && bracketDepth == 0)
+        {
+            foundCompound = true;
+            break;
+        }
+        if (tok->type == TokenType::SEMI_COLON)
+            break;
+        if (tok->type == TokenType::END)
+            break;
+        if (tok->type == TokenType::L_BR)
+            bracketDepth++;
+        if (tok->type == TokenType::R_BR)
+        {
+            bracketDepth--;
+            if (bracketDepth < 0)
+                break;
+        }
+        getNextToken();
+    }
+
+    // Restore position
+    currentToken = saved;
+    begin = currentToken;
+
+    if (foundCompound)
+        ret->children.push_back(functionDefinition(begin));
+    else
+        ret->children.push_back(declaration(begin));
+
+    return ret;
+}
+
+// Statement parsing functions
+std::shared_ptr<Node> AST::statement(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::STATEMENT);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::CASE || begin->type == TokenType::DEFAULT ||
+        (begin->type == TokenType::ID && peekNextToken()->type == TokenType::COLON))
+    {
+        ret->children.push_back(labeledStatement(begin));
+    }
+    else if (begin->type == TokenType::L_CUR)
+    {
+        ret->children.push_back(compoundStatement(begin));
+    }
+    else if (begin->type == TokenType::IF || begin->type == TokenType::SWITCH)
+    {
+        ret->children.push_back(selectionStatement(begin));
+    }
+    else if (begin->type == TokenType::WHILE || begin->type == TokenType::DO || begin->type == TokenType::FOR)
+    {
+        ret->children.push_back(iterationStatement(begin));
+    }
+    else if (begin->type == TokenType::GOTO || begin->type == TokenType::CONT ||
+             begin->type == TokenType::BRK || begin->type == TokenType::RETURN)
+    {
+        ret->children.push_back(jumpStatement(begin));
+    }
+    else
+    {
+        ret->children.push_back(expressionStatement(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::labeledStatement(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::LABELED_STATEMENT);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::ID)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::COLON)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(statement(begin));
+        }
+    }
+    else if (begin->type == TokenType::CASE)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(constantExpression(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::COLON)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(statement(begin));
+        }
+    }
+    else if (begin->type == TokenType::DEFAULT)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::COLON)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(statement(begin));
+        }
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::compoundStatement(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::COMPOUND_STATEMENT);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::L_CUR)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = peekNextToken();
+        if (begin->type == TokenType::R_CUR)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else
+        {
+            begin = getNextToken();
+            ret->children.push_back(blockItemList(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_CUR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            else
+                loggedError.addError(lineNo, "Expected '}' in compound statement");
+        }
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::blockItemList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::BLOCK_ITEM_LIST);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    ret->children.push_back(blockItem(begin));
+
+    while (peekNextToken()->type != TokenType::R_CUR && peekNextToken()->type != TokenType::END)
+    {
+        begin = getNextToken();
+        ret->children.push_back(blockItem(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::blockItem(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::BLOCK_ITEM);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (storageClassSpecifier(begin) || typeSpecifier(begin) || typeQualifier(begin) || 
+        functionSpecifier(begin) || isAlignmentSpecifier(begin) || begin->type == TokenType::STATIC_ASSERT ||
+        (!begin->lexeme.empty() && isTypeName(begin->lexeme)))
+    {
+        ret->children.push_back(declaration(begin));
+    }
+    else
+    {
+        ret->children.push_back(statement(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::expressionStatement(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::EXPRESSION_STATEMENT);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::SEMI_COLON)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    }
+    else
+    {
+        ret->children.push_back(expression(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::SEMI_COLON)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        else
+            loggedError.addError(lineNo, "Expected ';' after expression");
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::selectionStatement(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::SELECTION_STATEMENT);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::IF)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(expression(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_BR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                ret->children.push_back(statement(begin));
+
+                if (peekNextToken()->type == TokenType::ELSE)
+                {
+                    begin = getNextToken();
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                    begin = getNextToken();
+                    ret->children.push_back(statement(begin));
+                }
+            }
+        }
+    }
+    else if (begin->type == TokenType::SWITCH)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(expression(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_BR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                ret->children.push_back(statement(begin));
+            }
+        }
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::iterationStatement(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ITERATION_STATEMENT);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::WHILE)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(expression(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_BR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                ret->children.push_back(statement(begin));
+            }
+        }
+    }
+    else if (begin->type == TokenType::DO)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(statement(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::WHILE)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            if (begin->type == TokenType::L_BR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                ret->children.push_back(expression(begin));
+                begin = getNextToken();
+                if (begin->type == TokenType::R_BR)
+                {
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                    begin = getNextToken();
+                    if (begin->type == TokenType::SEMI_COLON)
+                        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                }
+            }
+        }
+    }
+    else if (begin->type == TokenType::FOR)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+
+            // First part: declaration or expression-statement
+            if (storageClassSpecifier(begin) || typeSpecifier(begin) || typeQualifier(begin))
+            {
+                ret->children.push_back(declaration(begin));
+            }
+            else
+            {
+                ret->children.push_back(expressionStatement(begin));
+            }
+
+            begin = getNextToken();
+            ret->children.push_back(expressionStatement(begin));
+
+            begin = peekNextToken();
+            if (begin->type != TokenType::R_BR)
+            {
+                begin = getNextToken();
+                ret->children.push_back(expression(begin));
+                begin = getNextToken();
+            }
+            else
+            {
+                begin = getNextToken();
+            }
+
+            if (begin->type == TokenType::R_BR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                ret->children.push_back(statement(begin));
+            }
+        }
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::jumpStatement(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::JUMP_STATEMENT);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::GOTO)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::ID)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            if (begin->type == TokenType::SEMI_COLON)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+    }
+    else if (begin->type == TokenType::CONT || begin->type == TokenType::BRK)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::SEMI_COLON)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    }
+    else if (begin->type == TokenType::RETURN)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = peekNextToken();
+        if (begin->type != TokenType::SEMI_COLON)
+        {
+            begin = getNextToken();
+            ret->children.push_back(expression(begin));
+            begin = getNextToken();
+        }
+        else
+        {
+            begin = getNextToken();
+        }
+        if (begin->type == TokenType::SEMI_COLON)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    }
+    return ret;
+}
+
+// Expression parsing functions
+std::shared_ptr<Node> AST::primaryExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::PRIMARY_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::ID || begin->type == TokenType::CONSTANT || 
+        begin->type == TokenType::STRING_LITERAL || begin->type == TokenType::FUNC_NAME)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    }
+    else if (begin->type == TokenType::GENERIC)
+    {
+        ret->children.push_back(genericSelection(begin));
+    }
+    else if (begin->type == TokenType::L_BR)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(expression(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::R_BR)
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        else
+            loggedError.addGrammarError(lineNo, "Expected ')' in primary expression");
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::postfixExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::POSTFIX_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(primaryExpression(begin));
+
+    while (true)
+    {
+        auto next = peekNextToken();
+        if (next->type == TokenType::L_SQR)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(expression(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_SQR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else if (next->type == TokenType::L_BR)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            else
+            {
+                ret->children.push_back(argumentExpressionList(begin));
+                begin = getNextToken();
+                if (begin->type == TokenType::R_BR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            }
+        }
+        else if (next->type == TokenType::DOT || next->type == TokenType::ARRORW)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            if (begin->type == TokenType::ID)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else if (next->type == TokenType::INC || next->type == TokenType::DEC)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        }
+        else
+            break;
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::argumentExpressionList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ARGUMENT_EXPRESSION_LIST);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(assignmentExpression(begin));
+
+    while (peekNextToken()->type == TokenType::COMMA)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(assignmentExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::unaryExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::UNARY_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    if (begin->type == TokenType::INC || begin->type == TokenType::DEC)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(unaryExpression(begin));
+    }
+    else if (begin->type == TokenType::SIZEOF || begin->type == TokenType::ALIGNOF)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(typeName(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            else
+                loggedError.addGrammarError(lineNo, "Expected ')' after type name");
+        }
+        else
+        {
+            // sizeof can have unary expression, but alignof requires parentheses
+            if (begin->type == TokenType::ALIGNOF)
+                loggedError.addGrammarError(lineNo, "_Alignof requires parentheses");
+            else
+                ret->children.push_back(unaryExpression(begin));
+        }
+    }
+    else if (begin->type == TokenType::REFERENCE || begin->type == TokenType::MUL ||
+             begin->type == TokenType::PLUS || begin->type == TokenType::MINUS ||
+             begin->type == TokenType::TILDE || begin->type == TokenType::NOT)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(castExpression(begin));
+    }
+    else
+    {
+        ret->children.push_back(postfixExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::castExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::CAST_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    // Check if this is a cast: '(' type-name ')'
+    if (begin->type == TokenType::L_BR)
+    {
+        auto saved = currentToken;
+        begin = getNextToken();
+        if (typeSpecifier(begin) || typeQualifier(begin))
+        {
+            currentToken = std::prev(currentToken);
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(typeName(begin));
+            begin = getNextToken();
+            if (begin->type == TokenType::R_BR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                ret->children.push_back(castExpression(begin));
+                return ret;
+            }
+        }
+        currentToken = saved;
+        begin = currentToken;
+    }
+    ret->children.push_back(unaryExpression(begin));
+    return ret;
+}
+
+std::shared_ptr<Node> AST::multiplicativeExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::MULTIPLICATIVE_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(castExpression(begin));
+
+    while (true)
+    {
+        auto next = peekNextToken();
+        if (next->type == TokenType::MUL || next->type == TokenType::DIV || next->type == TokenType::MOD)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(castExpression(begin));
+        }
+        else
+            break;
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::additiveExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ADDITIVE_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(multiplicativeExpression(begin));
+
+    while (true)
+    {
+        auto next = peekNextToken();
+        if (next->type == TokenType::PLUS || next->type == TokenType::MINUS)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(multiplicativeExpression(begin));
+        }
+        else
+            break;
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::shiftExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::SHIFT_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(additiveExpression(begin));
+
+    while (true)
+    {
+        auto next = peekNextToken();
+        if (next->type == TokenType::LEF_SHIFT || next->type == TokenType::RIGHT_SHIFT)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(additiveExpression(begin));
+        }
+        else
+            break;
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::relationalExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::RELATIONAL_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(shiftExpression(begin));
+
+    while (true)
+    {
+        auto next = peekNextToken();
+        if (next->type == TokenType::LT || next->type == TokenType::GT ||
+            next->type == TokenType::LTE || next->type == TokenType::GTE)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(shiftExpression(begin));
+        }
+        else
+            break;
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::equalityExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::EQUALITY_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(relationalExpression(begin));
+
+    while (true)
+    {
+        auto next = peekNextToken();
+        if (next->type == TokenType::EQ || next->type == TokenType::UNEQUAL)
+        {
+            begin = getNextToken();
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(relationalExpression(begin));
+        }
+        else
+            break;
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::andExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::AND_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(equalityExpression(begin));
+
+    while (peekNextToken()->type == TokenType::REFERENCE)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(equalityExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::exclusiveOrExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::EXCLUSIVE_OR_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(andExpression(begin));
+
+    while (peekNextToken()->type == TokenType::CARET)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(andExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::inclusiveOrExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::INCLUSIVE_OR_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(exclusiveOrExpression(begin));
+
+    while (peekNextToken()->type == TokenType::PIPE)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(exclusiveOrExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::logicalAndExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::LOGICAL_AND_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(inclusiveOrExpression(begin));
+
+    while (peekNextToken()->type == TokenType::AND)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(inclusiveOrExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::logicalOrExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::LOGICAL_OR_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(logicalAndExpression(begin));
+
+    while (peekNextToken()->type == TokenType::OR)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(logicalAndExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::conditionalExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::CONDITIONAL_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(logicalOrExpression(begin));
+
+    if (peekNextToken()->type == TokenType::QUESTION)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(expression(begin));
+        begin = getNextToken();
+        if (begin->type == TokenType::COLON)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(conditionalExpression(begin));
+        }
+        else
+            loggedError.addError(lineNo, "Expected ':' in conditional expression");
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::assignmentExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ASSIGNMENT_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+
+    // Try to parse as conditional expression first
+    ret->children.push_back(conditionalExpression(begin));
+
+    // Check if there's an assignment operator following
+    auto next = peekNextToken();
+    if (assignOperator(next))
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(assignmentExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::expression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(assignmentExpression(begin));
+
+    while (peekNextToken()->type == TokenType::COMMA)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(assignmentExpression(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::constantExpression(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::CONSTANT_EXPRESSION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(conditionalExpression(begin));
+    return ret;
+}
+
+std::shared_ptr<Node> AST::typeName(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::TYPE_NAME);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    ret->children.push_back(specifierQualifierList(begin));
+
+    auto next = peekNextToken();
+    if (next->type == TokenType::MUL || next->type == TokenType::L_SQR || next->type == TokenType::L_BR)
+    {
+        begin = getNextToken();
+        ret->children.push_back(abstractDeclarator(begin));
+    }
+    return ret;
+}
+
+// C11 specific implementations
+std::shared_ptr<Node> AST::genericSelection(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::GENERIC_SELECTION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    
+    if (begin->type == TokenType::GENERIC)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(assignmentExpression(begin));
+            begin = getNextToken();
+            
+            if (begin->type == TokenType::COMMA)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                ret->children.push_back(genericAssocList(begin));
+                begin = getNextToken();
+            }
+            
+            if (begin->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            else
+                loggedError.addGrammarError(lineNo, "Expected ')' in generic selection");
+        }
+        else
+            loggedError.addGrammarError(lineNo, "Expected '(' after '_Generic'");
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::genericAssocList(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::GENERIC_ASSOC_LIST);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    
+    ret->children.push_back(genericAssociation(begin));
+    
+    while (peekNextToken()->type == TokenType::COMMA)
+    {
+        begin = getNextToken();
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(genericAssociation(begin));
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::genericAssociation(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::GENERIC_ASSOCIATION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    
+    if (begin->type == TokenType::DEFAULT)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+    }
+    else
+    {
+        ret->children.push_back(typeName(begin));
+        begin = getNextToken();
+    }
+    
+    if (begin->type == TokenType::COLON)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        ret->children.push_back(assignmentExpression(begin));
+    }
+    else
+        loggedError.addGrammarError(lineNo, "Expected ':' in generic association");
+    
+    return ret;
+}
+
+std::shared_ptr<Node> AST::staticAssertDeclaration(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::STATIC_ASSERT_DECLARATION);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    
+    if (begin->type == TokenType::STATIC_ASSERT)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(constantExpression(begin));
+            begin = getNextToken();
+            
+            if (begin->type == TokenType::COMMA)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+                
+                if (begin->type == TokenType::STRING_LITERAL)
+                {
+                    ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                    begin = getNextToken();
+                }
+                else
+                    loggedError.addGrammarError(lineNo, "Expected string literal in static assertion");
+            }
+            
+            if (begin->type == TokenType::R_BR)
+            {
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+                begin = getNextToken();
+            }
+            else
+                loggedError.addGrammarError(lineNo, "Expected ')' in static assertion");
+            
+            if (begin->type == TokenType::SEMI_COLON)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            else
+                loggedError.addGrammarError(lineNo, "Expected ';' after static assertion");
+        }
+        else
+            loggedError.addGrammarError(lineNo, "Expected '(' after '_Static_assert'");
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::alignmentSpecifier(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ALIGNMENT_SPECIFIER);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    
+    if (begin->type == TokenType::ALIGNAS)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            
+            // Try to parse as type-name first, if it fails, parse as constant expression
+            if (typeSpecifier(begin) || typeQualifier(begin))
+            {
+                ret->children.push_back(typeName(begin));
+            }
+            else
+            {
+                ret->children.push_back(constantExpression(begin));
+            }
+            begin = getNextToken();
+            
+            if (begin->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            else
+                loggedError.addGrammarError(lineNo, "Expected ')' in alignment specifier");
+        }
+        else
+            loggedError.addGrammarError(lineNo, "Expected '(' after '_Alignas'");
+    }
+    return ret;
+}
+
+std::shared_ptr<Node> AST::atomicTypeSpecifier(std::list<Token>::iterator begin)
+{
+    Node stmt(TokenType::ATOMIC_TYPE_SPECIFIER);
+    std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
+    
+    if (begin->type == TokenType::ATOMIC)
+    {
+        ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+        begin = getNextToken();
+        
+        if (begin->type == TokenType::L_BR)
+        {
+            ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            begin = getNextToken();
+            ret->children.push_back(typeName(begin));
+            begin = getNextToken();
+            
+            if (begin->type == TokenType::R_BR)
+                ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+            else
+                loggedError.addGrammarError(lineNo, "Expected ')' in atomic type specifier");
+        }
+        else
+        {
+            // If no '(', treat as type qualifier not type specifier
+            ungetToken();
+        }
+    }
+    return ret;
+}
+
 void AST::printBranches(const std::vector<bool> &isLast, std::ostream &os)
 {
     for (size_t i = 0; i < isLast.size() - 1; ++i)
@@ -2160,9 +2246,9 @@ void AST::traverseTree(std::shared_ptr<Node> node, std::vector<bool> &isLast, st
         isLast.pop_back();
     }
 }
-
 void AST::printAST(std::ostream &os)
 {
+
     if (!root)
         return;
     std::vector<bool> isLast;

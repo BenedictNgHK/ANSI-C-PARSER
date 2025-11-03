@@ -75,6 +75,22 @@ enum class TokenType
     CONST,
     UNSINGED,
     EXTERN,
+    
+    // C11 keywords
+    INLINE,
+    RESTRICT,
+    BOOL_TYPE,
+    COMPLEX,
+    IMAGINARY,
+    ALIGNAS,
+    ALIGNOF,
+    ATOMIC,
+    GENERIC,
+    NORETURN,
+    STATIC_ASSERT,
+    THREAD_LOCAL,
+    
+    FUNC_NAME,
 
     // int, char, String,
     // INT,
@@ -114,16 +130,46 @@ enum class TokenType
 
     ELLIPSIS,
     BACKSLASH,
+    GOTO,
+    QUESTION,
+    CARET,
+    PIPE,
 
     // syntax error
 
     // END: EOF
     END,
 
-    // Statements
-
+    // Non-terminal symbols for parse tree
     INCLUDE_STMT,
     TRANSLATION_UNIT,
+    EXTERNAL_DECLARATION,
+    FUNCTION_DEFINITION,
+    DECLARATION,
+    DECLARATION_LIST,
+    
+    // Expressions
+    PRIMARY_EXPRESSION,
+    POSTFIX_EXPRESSION,
+    ARGUMENT_EXPRESSION_LIST,
+    UNARY_EXPRESSION,
+    CAST_EXPRESSION,
+    MULTIPLICATIVE_EXPRESSION,
+    ADDITIVE_EXPRESSION,
+    SHIFT_EXPRESSION,
+    RELATIONAL_EXPRESSION,
+    EQUALITY_EXPRESSION,
+    AND_EXPRESSION,
+    EXCLUSIVE_OR_EXPRESSION,
+    INCLUSIVE_OR_EXPRESSION,
+    LOGICAL_AND_EXPRESSION,
+    LOGICAL_OR_EXPRESSION,
+    CONDITIONAL_EXPRESSION,
+    ASSIGNMENT_EXPRESSION,
+    EXPRESSION,
+    CONSTANT_EXPRESSION,
+    
+    // Declarations
     STRUCT_UNION_SPECIFIER,
     STRUCT_DECLARATION_LIST,
     SPECIFIER_QUALIFIER_LIST,
@@ -131,23 +177,50 @@ enum class TokenType
     STRUCT_DECLARATOR,
     STRUCT_DECLARATOR_LIST,
     DECLARATOR,
-
     DIRECT_DECLARATOR,
-    ASSIGNMENT_EXP,
     POINTER,
     PARAMETER_TYPE_LIST,
     PARAMETER_LIST,
     PARAMETER_DECLARATION,
     DECLARATION_SPECIFIERS,
     INIT_DECLARATOR,
+    INIT_DECLARATOR_LIST,
     ABSTRACT_DECLARATOR,
     IDENTIFIER_LIST,
     DIRECT_ABSTRACT_DECLARATOR,
     TYPE_QUALIFIER_LIST,
+    TYPE_NAME,
     INITIALIZER,
+    INITIALIZER_LIST,
+    DESIGNATION,
+    DESIGNATOR_LIST,
+    DESIGNATOR,
     ENUM_SPECIFIER,
     ENUMERATOR_LIST,
-    ENUMERATOR
+    ENUMERATOR,
+    
+    // Statements
+    STATEMENT,
+    LABELED_STATEMENT,
+    COMPOUND_STATEMENT,
+    BLOCK_ITEM_LIST,
+    BLOCK_ITEM,
+    EXPRESSION_STATEMENT,
+    SELECTION_STATEMENT,
+    ITERATION_STATEMENT,
+    JUMP_STATEMENT,
+    
+    // C11 specific non-terminals
+    GENERIC_SELECTION,
+    GENERIC_ASSOC_LIST,
+    GENERIC_ASSOCIATION,
+    STATIC_ASSERT_DECLARATION,
+    ALIGNMENT_SPECIFIER,
+    ATOMIC_TYPE_SPECIFIER,
+    FUNCTION_SPECIFIER,
+    STORAGE_CLASS_SPECIFIER,
+    TYPE_SPECIFIER,
+    TYPE_QUALIFIER
 };
 
 // convert TokenType to std::string
@@ -174,54 +247,78 @@ struct Token
         switch (t)
         {
         case TokenType::TRANSLATION_UNIT:
-            return true;
+        case TokenType::EXTERNAL_DECLARATION:
+        case TokenType::FUNCTION_DEFINITION:
+        case TokenType::DECLARATION:
+        case TokenType::DECLARATION_LIST:
         case TokenType::INCLUDE_STMT:
-            return true;
+        case TokenType::PRIMARY_EXPRESSION:
+        case TokenType::POSTFIX_EXPRESSION:
+        case TokenType::ARGUMENT_EXPRESSION_LIST:
+        case TokenType::UNARY_EXPRESSION:
+        case TokenType::CAST_EXPRESSION:
+        case TokenType::MULTIPLICATIVE_EXPRESSION:
+        case TokenType::ADDITIVE_EXPRESSION:
+        case TokenType::SHIFT_EXPRESSION:
+        case TokenType::RELATIONAL_EXPRESSION:
+        case TokenType::EQUALITY_EXPRESSION:
+        case TokenType::AND_EXPRESSION:
+        case TokenType::EXCLUSIVE_OR_EXPRESSION:
+        case TokenType::INCLUSIVE_OR_EXPRESSION:
+        case TokenType::LOGICAL_AND_EXPRESSION:
+        case TokenType::LOGICAL_OR_EXPRESSION:
+        case TokenType::CONDITIONAL_EXPRESSION:
+        case TokenType::ASSIGNMENT_EXPRESSION:
+        case TokenType::EXPRESSION:
+        case TokenType::CONSTANT_EXPRESSION:
         case TokenType::STRUCT_UNION_SPECIFIER:
-            return true;
         case TokenType::STRUCT_DECLARATION_LIST:
-            return true;
         case TokenType::SPECIFIER_QUALIFIER_LIST:
-            return true;
         case TokenType::STRUCT_DECLARATION:
-            return true;
         case TokenType::STRUCT_DECLARATOR:
-            return true;
-        case TokenType::DECLARATOR:
-            return true;
         case TokenType::STRUCT_DECLARATOR_LIST:
-            return true;
-        case TokenType::ENUM_SPECIFIER:
-            return true;
-        case TokenType::ENUMERATOR_LIST:
-            return true;
-        case TokenType::ENUMERATOR:
-            return true;
+        case TokenType::DECLARATOR:
         case TokenType::DIRECT_DECLARATOR:
-            return true;
-        case TokenType::ASSIGNMENT_EXP:
-            return true;
         case TokenType::POINTER:
-            return true;
-        case TokenType::TYPE_QUALIFIER_LIST:
-            return true;
         case TokenType::PARAMETER_TYPE_LIST:
-            return true;
         case TokenType::PARAMETER_LIST:
-            return true;
         case TokenType::PARAMETER_DECLARATION:
-            return true;
         case TokenType::DECLARATION_SPECIFIERS:
-            return true;
+        case TokenType::INIT_DECLARATOR:
+        case TokenType::INIT_DECLARATOR_LIST:
         case TokenType::ABSTRACT_DECLARATOR:
-            return true;
         case TokenType::IDENTIFIER_LIST:
-            return true;
-        case TokenType::INITIALIZER:
-            return true;
         case TokenType::DIRECT_ABSTRACT_DECLARATOR:
+        case TokenType::TYPE_QUALIFIER_LIST:
+        case TokenType::TYPE_NAME:
+        case TokenType::INITIALIZER:
+        case TokenType::INITIALIZER_LIST:
+        case TokenType::DESIGNATION:
+        case TokenType::DESIGNATOR_LIST:
+        case TokenType::DESIGNATOR:
+        case TokenType::ENUM_SPECIFIER:
+        case TokenType::ENUMERATOR_LIST:
+        case TokenType::ENUMERATOR:
+        case TokenType::STATEMENT:
+        case TokenType::LABELED_STATEMENT:
+        case TokenType::COMPOUND_STATEMENT:
+        case TokenType::BLOCK_ITEM_LIST:
+        case TokenType::BLOCK_ITEM:
+        case TokenType::EXPRESSION_STATEMENT:
+        case TokenType::SELECTION_STATEMENT:
+        case TokenType::ITERATION_STATEMENT:
+        case TokenType::JUMP_STATEMENT:
+        case TokenType::GENERIC_SELECTION:
+        case TokenType::GENERIC_ASSOC_LIST:
+        case TokenType::GENERIC_ASSOCIATION:
+        case TokenType::STATIC_ASSERT_DECLARATION:
+        case TokenType::ALIGNMENT_SPECIFIER:
+        case TokenType::ATOMIC_TYPE_SPECIFIER:
+        case TokenType::FUNCTION_SPECIFIER:
+        case TokenType::STORAGE_CLASS_SPECIFIER:
+        case TokenType::TYPE_SPECIFIER:
+        case TokenType::TYPE_QUALIFIER:
             return true;
-
         default:
             return false;
         }

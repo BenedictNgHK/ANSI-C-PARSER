@@ -16,11 +16,14 @@ class Error
 {
 public:
     std::map<int, std::string> errors;
+    std::vector<std::pair<int, std::string>> grammarErrors;
 
 public:
     Error() = default;
     void addError(int line, const std::string &error);
+    void addGrammarError(int line, const std::string &error);
     void printError(std::ostream &os);
+    inline bool hasErrors() const { return !errors.empty() || !grammarErrors.empty(); }
 
     ~Error() = default;
 };
