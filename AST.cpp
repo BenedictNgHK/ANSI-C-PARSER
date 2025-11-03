@@ -25,10 +25,10 @@ std::shared_ptr<Node> AST::parsingFile(std::shared_ptr<Node> root)
         {
             // Parse external declaration (function definition or declaration)
             auto extDecl = externalDeclaration();
+            if (!extDecl)
+                break; // End of file or unrecoverable error
             if (extDecl && !extDecl->children.empty())
                 root->children.push_back(extDecl);
-            else if (!extDecl)
-                break; // End of file
         }
     }
 
@@ -322,15 +322,24 @@ std::shared_ptr<Node> AST::directDeclarator(std::list<Token>::iterator begin)
         else if (begin->type == TokenType::L_BR)
         {
             if (next->type == TokenType::R_BR)
+            {
+                // Empty parameter list ()
                 ret->children.push_back(std::make_shared<Node>(std::move(*next)));
-
+            }
             else if (next->type == TokenType::ID)
+            {
                 ret->children.push_back(identifierList(next));
+                next = getNextToken();
+                if (next->type == TokenType::R_BR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+            }
             else
+            {
                 ret->children.push_back(parameterTypeList(next));
-            next = getNextToken();
-            if (next->type == TokenType::R_BR)
-                ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+                next = getNextToken();
+                if (next->type == TokenType::R_BR)
+                    ret->children.push_back(std::make_shared<Node>(std::move(*next)));
+            }
         }
     }
 
@@ -1033,6 +1042,9 @@ std::shared_ptr<Node> AST::declaration(std::list<Token>::iterator begin)
     Node stmt(TokenType::DECLARATION);
     std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
 
+    // Synchronize currentToken with begin iterator
+    currentToken = begin;
+
     // Check for static assertion
     if (begin->type == TokenType::STATIC_ASSERT)
     {
@@ -1084,24 +1096,34 @@ std::shared_ptr<Node> AST::functionDefinition(std::list<Token>::iterator begin)
     Node stmt(TokenType::FUNCTION_DEFINITION);
     std::shared_ptr<Node> ret = std::make_shared<Node>(std::move(stmt));
 
+    // Synchronize currentToken with begin iterator
+    currentToken = begin;
+
     ret->children.push_back(declarationSpecifier(begin));
     begin = getNextToken();
     ret->children.push_back(declarator(begin));
 
     // Check if there's a declaration list (old-style K&R C)
     auto next = peekNextToken();
+    
     if (storageClassSpecifier(next) || typeSpecifier(next) || typeQualifier(next))
     {
         begin = getNextToken();
         ret->children.push_back(declarationList(begin));
-        begin = getNextToken();
+        next = peekNextToken();
+    }
+    
+    // Now parse the compound statement (function body)
+    if (next->type == TokenType::L_CUR)
+    {
+        begin = getNextToken();  // Get the { token
+        ret->children.push_back(compoundStatement(begin));
     }
     else
     {
-        begin = getNextToken();
+        loggedError.addGrammarError(lineNo, "Expected '{' for function body");
     }
-
-    ret->children.push_back(compoundStatement(begin));
+    
     return ret;
 }
 
@@ -1146,8 +1168,12 @@ std::shared_ptr<Node> AST::externalDeclaration()
         !(begin->type == TokenType::STATIC_ASSERT) &&
         !(!begin->lexeme.empty() && isTypeName(begin->lexeme)))
     {
-        loggedError.addGrammarError(lineNo, "Expected declaration or function definition");
-        return ret;
+        // Don't log error if we're at END - this is expected
+        if (begin->type != TokenType::END)
+        {
+            loggedError.addGrammarError(lineNo, "Expected declaration or function definition");
+        }
+        return nullptr;
     }
 
     // Skip past declaration specifiers to find declarator
