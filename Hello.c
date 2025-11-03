@@ -1,4 +1,9 @@
 #include <stdio.h>
+struct Person
+{
+    char name[20];
+    int age;
+};
 int add(int a, int b)
 {
     return a + b;

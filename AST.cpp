@@ -76,6 +76,10 @@ std::shared_ptr<Node> AST::structUnionSpecifier(std::list<Token>::iterator begin
     Node stmt(TokenType::STRUCT_UNION_SPECIFIER);
     std::shared_ptr<Node> ret;
     ret = std::make_shared<Node>(std::move(stmt));
+    
+    // Synchronize currentToken with begin iterator
+    currentToken = begin;
+    
     ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
     auto itr = getNextToken();
     if (itr->type == TokenType::ID)
@@ -87,11 +91,11 @@ std::shared_ptr<Node> AST::structUnionSpecifier(std::list<Token>::iterator begin
             itr = getNextToken();
             ret->children.push_back(std::make_shared<Node>(std::move(*itr)));
             itr = getNextToken();
-            ret->children.push_back(std::make_shared<Node>(std::move(*structDeclarationList(itr))));
+            ret->children.push_back(structDeclarationList(itr));
             itr = getNextToken();
             if (itr->type != TokenType::R_CUR)
             {
-                loggedError.addError(lineNo, "Missing right curly bracket");
+                loggedError.addGrammarError(lineNo, "Expected '}' after struct declaration list");
                 ungetToken();
             }
             else
@@ -103,18 +107,18 @@ std::shared_ptr<Node> AST::structUnionSpecifier(std::list<Token>::iterator begin
         ret->children.push_back(std::make_shared<Node>(std::move(*itr)));
 
         itr = getNextToken();
-        ret->children.push_back(std::make_shared<Node>(std::move(*structDeclarationList(itr))));
+        ret->children.push_back(structDeclarationList(itr));
         itr = getNextToken();
         if (itr->type != TokenType::R_CUR)
         {
-            loggedError.addError(lineNo, "Missing right curly bracket");
+            loggedError.addGrammarError(lineNo, "Expected '}' after struct declaration list");
             ungetToken();
         }
         else
             ret->children.push_back(std::make_shared<Node>(std::move(*(itr))));
     }
     else
-        loggedError.addError(lineNo, STRUCT_UNION_ERROR);
+        loggedError.addGrammarError(lineNo, STRUCT_UNION_ERROR);
     return ret;
 }
 std::shared_ptr<Node> AST::structDeclarationList(std::list<Token>::iterator begin)
@@ -122,10 +126,16 @@ std::shared_ptr<Node> AST::structDeclarationList(std::list<Token>::iterator begi
     Node stmt(TokenType::STRUCT_DECLARATION_LIST);
     std::shared_ptr<Node> ret;
     ret = std::make_shared<Node>(std::move(stmt));
-    while (1)
+    
+    // Synchronize currentToken with begin iterator  
+    currentToken = begin;
+    
+    // Parse first struct declaration (begin already points to it)
+    ret->children.push_back(structDeclaration(begin));
+    
+    // Parse remaining struct declarations
+    while (peekNextToken()->type != TokenType::R_CUR && peekNextToken()->type != TokenType::END)
     {
-        if (peekNextToken()->type == TokenType::R_CUR)
-            break;
         begin = getNextToken();
         ret->children.push_back(structDeclaration(begin));
     }
@@ -136,6 +146,9 @@ std::shared_ptr<Node> AST::structDeclaration(std::list<Token>::iterator begin)
     Node stmt(TokenType::STRUCT_DECLARATION);
     std::shared_ptr<Node> ret;
     ret = std::make_shared<Node>(std::move(stmt));
+    
+    // Synchronize currentToken with begin iterator
+    currentToken = begin;
     
     // Check for static assertion
     if (begin->type == TokenType::STATIC_ASSERT)
@@ -167,7 +180,7 @@ std::shared_ptr<Node> AST::structDeclaration(std::list<Token>::iterator begin)
 }
 std::shared_ptr<Node> AST::structDeclaratorList(std::list<Token>::iterator begin)
 {
-    Node stmt(TokenType::STRUCT_DECLARATION_LIST);
+    Node stmt(TokenType::STRUCT_DECLARATOR_LIST);
     std::shared_ptr<Node> ret;
     ret = std::make_shared<Node>(std::move(stmt));
 
@@ -187,6 +200,10 @@ std::shared_ptr<Node> AST::structDeclarator(std::list<Token>::iterator begin)
     Node stmt(TokenType::STRUCT_DECLARATOR);
     std::shared_ptr<Node> ret;
     ret = std::make_shared<Node>(std::move(stmt));
+    
+    // Synchronize currentToken with begin iterator
+    currentToken = begin;
+    
     if (begin->type != TokenType::COLON)
     {
         ret->children.push_back(declarator(begin));
@@ -222,6 +239,10 @@ std::shared_ptr<Node> AST::declarator(std::list<Token>::iterator begin)
     Node stmt(TokenType::DECLARATOR);
     std::shared_ptr<Node> ret;
     ret = std::make_shared<Node>(std::move(stmt));
+    
+    // Synchronize currentToken with begin iterator
+    currentToken = begin;
+    
     if (begin->type == TokenType::MUL)
     {
         ret->children.push_back(pointer(begin));
@@ -235,6 +256,10 @@ std::shared_ptr<Node> AST::directDeclarator(std::list<Token>::iterator begin)
     Node stmt(TokenType::DIRECT_DECLARATOR);
     std::shared_ptr<Node> ret;
     ret = std::make_shared<Node>(std::move(stmt));
+    
+    // Synchronize currentToken with begin iterator
+    currentToken = begin;
+    
     if (begin->type == TokenType::ID || begin->type == TokenType::MAIN)
         ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
     else if (begin->type == TokenType::L_BR)
@@ -245,6 +270,12 @@ std::shared_ptr<Node> AST::directDeclarator(std::list<Token>::iterator begin)
         begin = getNextToken();
         if (begin->type == TokenType::R_BR)
             ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
+    }
+    else
+    {
+        // Invalid token for start of direct declarator
+        loggedError.addGrammarError(lineNo, "Expected identifier or '(' in declarator");
+        return ret; // Return incomplete node
     }
     while (peekNextToken()->type == TokenType::L_SQR || peekNextToken()->type == TokenType::L_BR)
     {
@@ -489,15 +520,48 @@ std::shared_ptr<Node> AST::declarationSpecifier(std::list<Token>::iterator begin
     auto start = begin;
     
     // First token must be a declaration specifier
+    bool hasCompleteTypeSpec = false; // Track if we've seen a complete type specifier (struct/union/enum with body)
+    
     if (storageClassSpecifier(begin) || typeSpecifier(begin) || typeQualifier(begin) || 
         functionSpecifier(begin) || isAlignmentSpecifier(begin) ||
         (!begin->lexeme.empty() && isTypeName(begin->lexeme)))
     {
         // Handle first specifier
         if (structUnion(begin))
-            ret->children.push_back(structUnionSpecifier(begin));
+        {
+            auto structNode = structUnionSpecifier(begin);
+            ret->children.push_back(structNode);
+            // Check if this struct/union has a body - if so, no more type specifiers allowed
+            if (structNode && structNode->children.size() >= 3)
+            {
+                // Has at least: STRUCT/UNION, possibly ID, and L_CUR (indicating a body)
+                for (const auto& child : structNode->children)
+                {
+                    if (child && child->t.type == TokenType::L_CUR)
+                    {
+                        hasCompleteTypeSpec = true;
+                        break;
+                    }
+                }
+            }
+        }
         else if (begin->type == TokenType::ENUM)
-            ret->children.push_back(enumSpecifier(begin));
+        {
+            auto enumNode = enumSpecifier(begin);
+            ret->children.push_back(enumNode);
+            // Check if this enum has a body
+            if (enumNode && enumNode->children.size() >= 2)
+            {
+                for (const auto& child : enumNode->children)
+                {
+                    if (child && child->t.type == TokenType::L_CUR)
+                    {
+                        hasCompleteTypeSpec = true;
+                        break;
+                    }
+                }
+            }
+        }
         else if (isAlignmentSpecifier(begin))
             ret->children.push_back(alignmentSpecifier(begin));
         else if (begin->type == TokenType::ATOMIC && peekNextToken()->type == TokenType::L_BR)
@@ -505,8 +569,8 @@ std::shared_ptr<Node> AST::declarationSpecifier(std::list<Token>::iterator begin
         else
             ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
         
-        // Parse additional specifiers
-        while (true)
+        // Parse additional specifiers ONLY if we haven't seen a complete type definition
+        while (!hasCompleteTypeSpec)
         {
             begin = peekNextToken();
             if (storageClassSpecifier(begin) || typeSpecifier(begin) || typeQualifier(begin) || 
@@ -515,9 +579,33 @@ std::shared_ptr<Node> AST::declarationSpecifier(std::list<Token>::iterator begin
             {
                 begin = getNextToken();
                 if (structUnion(begin))
-                    ret->children.push_back(structUnionSpecifier(begin));
+                {
+                    auto structNode = structUnionSpecifier(begin);
+                    ret->children.push_back(structNode);
+                    // Check for body
+                    for (const auto& child : structNode->children)
+                    {
+                        if (child && child->t.type == TokenType::L_CUR)
+                        {
+                            hasCompleteTypeSpec = true;
+                            break;
+                        }
+                    }
+                }
                 else if (begin->type == TokenType::ENUM)
-                    ret->children.push_back(enumSpecifier(begin));
+                {
+                    auto enumNode = enumSpecifier(begin);
+                    ret->children.push_back(enumNode);
+                    // Check for body
+                    for (const auto& child : enumNode->children)
+                    {
+                        if (child && child->t.type == TokenType::L_CUR)
+                        {
+                            hasCompleteTypeSpec = true;
+                            break;
+                        }
+                    }
+                }
                 else if (isAlignmentSpecifier(begin))
                     ret->children.push_back(alignmentSpecifier(begin));
                 else if (begin->type == TokenType::ATOMIC && peekNextToken()->type == TokenType::L_BR)
@@ -942,14 +1030,16 @@ std::shared_ptr<Node> AST::specifierQualifierList(std::list<Token>::iterator beg
     Node stmt(TokenType::SPECIFIER_QUALIFIER_LIST);
     std::shared_ptr<Node> ret;
     ret = std::make_shared<Node>(std::move(stmt));
+    
+    // Synchronize currentToken with begin iterator
+    currentToken = begin;
+    
     while (typeQualifier(begin) || typeSpecifier(begin))
     {
         if (structUnion(begin))
-            ret->children.push_back((structUnionSpecifier(begin)));
+            ret->children.push_back(structUnionSpecifier(begin));
         else if (begin->type == TokenType::ENUM)
-        {
             ret->children.push_back(enumSpecifier(begin));
-        }
         else
             ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
         begin = getNextToken();
@@ -1055,15 +1145,29 @@ std::shared_ptr<Node> AST::declaration(std::list<Token>::iterator begin)
     ret->children.push_back(declarationSpecifier(begin));
 
     auto next = peekNextToken();
-    if (next->type != TokenType::SEMI_COLON)
+    
+    // Check if next token can start an init_declarator
+    // Valid starts: *, ID, (
+    // Invalid: type specifiers, keywords, etc.
+    bool canStartDeclarator = (next->type == TokenType::MUL || next->type == TokenType::ID || 
+                               next->type == TokenType::L_BR || next->type == TokenType::MAIN);
+    
+    if (next->type != TokenType::SEMI_COLON && canStartDeclarator)
     {
         begin = getNextToken();
         ret->children.push_back(initDeclaratorList(begin));
         begin = getNextToken();
     }
-    else
+    else if (next->type == TokenType::SEMI_COLON)
     {
         begin = getNextToken();
+    }
+    else
+    {
+        // Expected semicolon or valid declarator, but got something else
+        loggedError.addGrammarError(lineNo, "Expected ';' or declarator after declaration specifiers");
+        // Don't consume the invalid token - let the caller handle it
+        return ret;
     }
 
     if (begin->type == TokenType::SEMI_COLON)
@@ -1177,37 +1281,143 @@ std::shared_ptr<Node> AST::externalDeclaration()
     }
 
     // Skip past declaration specifiers to find declarator
-    while (storageClassSpecifier(peekNextToken()) || typeSpecifier(peekNextToken()) ||
-           typeQualifier(peekNextToken()) || functionSpecifier(peekNextToken()) ||
-           isAlignmentSpecifier(peekNextToken()))
+    // Need to handle struct/union/enum definitions with bodies
+    
+    // Process the first token (currentToken is already at it)
+    bool hasStructBody = false;
+    if (currentToken->type == TokenType::STRUCT || currentToken->type == TokenType::UNION || currentToken->type == TokenType::ENUM)
     {
-        getNextToken();
+        // Check for optional identifier
+        auto afterKeyword = peekNextToken();
+        if (afterKeyword->type == TokenType::ID)
+        {
+            getNextToken(); // consume the identifier
+            afterKeyword = peekNextToken();
+        }
+        
+        // Skip the body if present  
+        if (afterKeyword->type == TokenType::L_CUR)
+        {
+            hasStructBody = true;
+            getNextToken(); // consume {
+            int depth = 1;
+            while (depth > 0)
+            {
+                auto t = peekNextToken();
+                if (t->type == TokenType::END)
+                    break;
+                if (t->type == TokenType::L_CUR)
+                    depth++;
+                else if (t->type == TokenType::R_CUR)
+                    depth--;
+                getNextToken();
+            }
+            // After processing struct/union/enum with body, stop looking for more specifiers
+            // The declaration must end here (possibly with declarators then semicolon)
+        }
+    }
+    
+    // Continue with remaining declaration specifiers ONLY if we haven't seen a struct/union/enum body
+    // If we've seen a complete struct definition, we must stop here
+    if (!hasStructBody)
+    {
+        while (true)
+        {
+            auto tok = peekNextToken();
+            
+            if (storageClassSpecifier(tok) || typeQualifier(tok) || 
+                functionSpecifier(tok) || isAlignmentSpecifier(tok))
+            {
+                getNextToken();
+                continue;
+            }
+            
+            // Handle additional struct/union/enum
+            if (tok->type == TokenType::STRUCT || tok->type == TokenType::UNION || tok->type == TokenType::ENUM)
+            {
+                getNextToken(); // consume struct/union/enum
+                
+                // Check for optional identifier
+                auto afterKeyword = peekNextToken();
+                if (afterKeyword->type == TokenType::ID)
+                {
+                    getNextToken(); // consume the identifier
+                    afterKeyword = peekNextToken();
+                }
+                
+                // Skip the body if present  
+                if (afterKeyword->type == TokenType::L_CUR)
+                {
+                    getNextToken(); // consume {
+                    int depth = 1;
+                    while (depth > 0)
+                    {
+                        auto t = peekNextToken();
+                        if (t->type == TokenType::END)
+                            break;
+                        if (t->type == TokenType::L_CUR)
+                            depth++;
+                        else if (t->type == TokenType::R_CUR)
+                            depth--;
+                        getNextToken();
+                    }
+                    // Found complete struct definition with body, stop here
+                    break;
+                }
+                continue;
+            }
+            
+            if (typeSpecifier(tok) || (!tok->lexeme.empty() && isTypeName(tok->lexeme)))
+            {
+                getNextToken();
+                continue;
+            }
+            
+            break;
+        }
     }
 
-    // Skip past declarator to check what follows
-    int bracketDepth = 0;
+    // After declaration specifiers, check what follows
     bool foundCompound = false;
-    while (true)
+    
+    auto nextTok = peekNextToken();
+    
+    // Check if next token can start a declarator
+    // If it's a type specifier, storage class, etc., it starts a NEW declaration, not a declarator!
+    if (nextTok->type == TokenType::SEMI_COLON ||
+        storageClassSpecifier(nextTok) || typeSpecifier(nextTok) || typeQualifier(nextTok) ||
+        functionSpecifier(nextTok) || isAlignmentSpecifier(nextTok) ||
+        nextTok->type == TokenType::STATIC_ASSERT)
     {
-        auto tok = peekNextToken();
-        if (tok->type == TokenType::L_CUR && bracketDepth == 0)
+        // Cannot start a declarator - this must be a declaration
+        foundCompound = false;
+    }
+    else
+    {
+        // Next token could start a declarator - check if this leads to a function body
+        int bracketDepth = 0;
+        while (true)
         {
-            foundCompound = true;
-            break;
-        }
-        if (tok->type == TokenType::SEMI_COLON)
-            break;
-        if (tok->type == TokenType::END)
-            break;
-        if (tok->type == TokenType::L_BR)
-            bracketDepth++;
-        if (tok->type == TokenType::R_BR)
-        {
-            bracketDepth--;
-            if (bracketDepth < 0)
+            auto tok = peekNextToken();
+            if (tok->type == TokenType::L_CUR && bracketDepth == 0)
+            {
+                foundCompound = true;
                 break;
+            }
+            if (tok->type == TokenType::SEMI_COLON)
+                break;
+            if (tok->type == TokenType::END)
+                break;
+            if (tok->type == TokenType::L_BR)
+                bracketDepth++;
+            if (tok->type == TokenType::R_BR)
+            {
+                bracketDepth--;
+                if (bracketDepth < 0)
+                    break;
+            }
+            getNextToken();
         }
-        getNextToken();
     }
 
     // Restore position
