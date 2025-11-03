@@ -240,8 +240,8 @@ public:
 struct Token
 {
     Token();
-    Token(TokenType type, const std::string &lexeme);
-    Token(TokenType type, const std::string &&lexeme);
+    Token(TokenType type, const std::string &lexeme, int lineNo = 1);
+    Token(TokenType type, const std::string &&lexeme, int lineNo = 1);
     inline bool isStmt(TokenType t)
     {
         switch (t)
@@ -324,6 +324,7 @@ struct Token
         }
     }
     TokenType type;
+    int lineNo;
     ~Token() = default;
     std::string lexeme;
 };

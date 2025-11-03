@@ -95,7 +95,7 @@ std::shared_ptr<Node> AST::structUnionSpecifier(std::list<Token>::iterator begin
             itr = getNextToken();
             if (itr->type != TokenType::R_CUR)
             {
-                loggedError.addGrammarError(lineNo, "Expected '}' after struct declaration list");
+                loggedError.addGrammarError(begin->lineNo, "Expected '}' after struct declaration list");
                 ungetToken();
             }
             else
@@ -111,14 +111,14 @@ std::shared_ptr<Node> AST::structUnionSpecifier(std::list<Token>::iterator begin
         itr = getNextToken();
         if (itr->type != TokenType::R_CUR)
         {
-            loggedError.addGrammarError(lineNo, "Expected '}' after struct declaration list");
+            loggedError.addGrammarError(begin->lineNo, "Expected '}' after struct declaration list");
             ungetToken();
         }
         else
             ret->children.push_back(std::make_shared<Node>(std::move(*(itr))));
     }
     else
-        loggedError.addGrammarError(lineNo, STRUCT_UNION_ERROR);
+        loggedError.addGrammarError(begin->lineNo, STRUCT_UNION_ERROR);
     return ret;
 }
 std::shared_ptr<Node> AST::structDeclarationList(std::list<Token>::iterator begin)
@@ -175,7 +175,7 @@ std::shared_ptr<Node> AST::structDeclaration(std::list<Token>::iterator begin)
     if (begin->type == TokenType::SEMI_COLON)
         ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
     else
-        loggedError.addGrammarError(lineNo, "Expected ';' after struct declaration");
+        loggedError.addGrammarError(begin->lineNo, "Expected ';' after struct declaration");
     return ret;
 }
 std::shared_ptr<Node> AST::structDeclaratorList(std::list<Token>::iterator begin)
@@ -274,7 +274,7 @@ std::shared_ptr<Node> AST::directDeclarator(std::list<Token>::iterator begin)
     else
     {
         // Invalid token for start of direct declarator
-        loggedError.addGrammarError(lineNo, "Expected identifier or '(' in declarator");
+        loggedError.addGrammarError(begin->lineNo, "Expected identifier or '(' in declarator");
         return ret; // Return incomplete node
     }
     while (peekNextToken()->type == TokenType::L_SQR || peekNextToken()->type == TokenType::L_BR)
@@ -1165,7 +1165,7 @@ std::shared_ptr<Node> AST::declaration(std::list<Token>::iterator begin)
     else
     {
         // Expected semicolon or valid declarator, but got something else
-        loggedError.addGrammarError(lineNo, "Expected ';' or declarator after declaration specifiers");
+        loggedError.addGrammarError(next->lineNo, "Expected ';' or declarator after declaration specifiers");
         // Don't consume the invalid token - let the caller handle it
         return ret;
     }
@@ -1173,7 +1173,7 @@ std::shared_ptr<Node> AST::declaration(std::list<Token>::iterator begin)
     if (begin->type == TokenType::SEMI_COLON)
         ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
     else
-        loggedError.addGrammarError(lineNo, "Expected ';' after declaration");
+        loggedError.addGrammarError(begin->lineNo, "Expected ';' after declaration");
 
     return ret;
 }
@@ -1225,7 +1225,7 @@ std::shared_ptr<Node> AST::functionDefinition(std::list<Token>::iterator begin)
     }
     else
     {
-        loggedError.addGrammarError(lineNo, "Expected '{' for function body");
+        loggedError.addGrammarError(begin->lineNo, "Expected '{' for function body");
     }
     
     return ret;
@@ -1275,7 +1275,7 @@ std::shared_ptr<Node> AST::externalDeclaration()
         // Don't log error if we're at END - this is expected
         if (begin->type != TokenType::END)
         {
-            loggedError.addGrammarError(lineNo, "Expected declaration or function definition");
+            loggedError.addGrammarError(begin->lineNo, "Expected declaration or function definition");
         }
         return nullptr;
     }
@@ -1395,13 +1395,26 @@ std::shared_ptr<Node> AST::externalDeclaration()
     else
     {
         // Next token could start a declarator - check if this leads to a function body
+        // IMPORTANT: If we see '=' before '{', it's an initializer, NOT a function body!
         int bracketDepth = 0;
+        bool sawAssign = false;  // Track if we saw an '=' before any '{'
         while (true)
         {
             auto tok = peekNextToken();
+            
+            // Check for assignment operator - if present, this is an initializer, not function body
+            if (tok->type == TokenType::ASSIGN)
+            {
+                sawAssign = true;
+                getNextToken();
+                continue;
+            }
+            
             if (tok->type == TokenType::L_CUR && bracketDepth == 0)
             {
-                foundCompound = true;
+                // Only treat as function body if we didn't see '=' before this
+                if (!sawAssign)
+                    foundCompound = true;
                 break;
             }
             if (tok->type == TokenType::SEMI_COLON)
@@ -1806,7 +1819,7 @@ std::shared_ptr<Node> AST::primaryExpression(std::list<Token>::iterator begin)
         if (begin->type == TokenType::R_BR)
             ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
         else
-            loggedError.addGrammarError(lineNo, "Expected ')' in primary expression");
+            loggedError.addGrammarError(begin->lineNo, "Expected ')' in primary expression");
     }
     return ret;
 }
@@ -1904,13 +1917,13 @@ std::shared_ptr<Node> AST::unaryExpression(std::list<Token>::iterator begin)
             if (begin->type == TokenType::R_BR)
                 ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
             else
-                loggedError.addGrammarError(lineNo, "Expected ')' after type name");
+                loggedError.addGrammarError(begin->lineNo, "Expected ')' after type name");
         }
         else
         {
             // sizeof can have unary expression, but alignof requires parentheses
             if (begin->type == TokenType::ALIGNOF)
-                loggedError.addGrammarError(lineNo, "_Alignof requires parentheses");
+                loggedError.addGrammarError(begin->lineNo, "_Alignof requires parentheses");
             else
                 ret->children.push_back(unaryExpression(begin));
         }
@@ -2267,10 +2280,10 @@ std::shared_ptr<Node> AST::genericSelection(std::list<Token>::iterator begin)
             if (begin->type == TokenType::R_BR)
                 ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
             else
-                loggedError.addGrammarError(lineNo, "Expected ')' in generic selection");
+                loggedError.addGrammarError(begin->lineNo, "Expected ')' in generic selection");
         }
         else
-            loggedError.addGrammarError(lineNo, "Expected '(' after '_Generic'");
+            loggedError.addGrammarError(begin->lineNo, "Expected '(' after '_Generic'");
     }
     return ret;
 }
@@ -2315,7 +2328,7 @@ std::shared_ptr<Node> AST::genericAssociation(std::list<Token>::iterator begin)
         ret->children.push_back(assignmentExpression(begin));
     }
     else
-        loggedError.addGrammarError(lineNo, "Expected ':' in generic association");
+        loggedError.addGrammarError(begin->lineNo, "Expected ':' in generic association");
     
     return ret;
 }
@@ -2348,7 +2361,7 @@ std::shared_ptr<Node> AST::staticAssertDeclaration(std::list<Token>::iterator be
                     begin = getNextToken();
                 }
                 else
-                    loggedError.addGrammarError(lineNo, "Expected string literal in static assertion");
+                    loggedError.addGrammarError(begin->lineNo, "Expected string literal in static assertion");
             }
             
             if (begin->type == TokenType::R_BR)
@@ -2357,15 +2370,15 @@ std::shared_ptr<Node> AST::staticAssertDeclaration(std::list<Token>::iterator be
                 begin = getNextToken();
             }
             else
-                loggedError.addGrammarError(lineNo, "Expected ')' in static assertion");
+                loggedError.addGrammarError(begin->lineNo, "Expected ')' in static assertion");
             
             if (begin->type == TokenType::SEMI_COLON)
                 ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
             else
-                loggedError.addGrammarError(lineNo, "Expected ';' after static assertion");
+                loggedError.addGrammarError(begin->lineNo, "Expected ';' after static assertion");
         }
         else
-            loggedError.addGrammarError(lineNo, "Expected '(' after '_Static_assert'");
+            loggedError.addGrammarError(begin->lineNo, "Expected '(' after '_Static_assert'");
     }
     return ret;
 }
@@ -2399,10 +2412,10 @@ std::shared_ptr<Node> AST::alignmentSpecifier(std::list<Token>::iterator begin)
             if (begin->type == TokenType::R_BR)
                 ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
             else
-                loggedError.addGrammarError(lineNo, "Expected ')' in alignment specifier");
+                loggedError.addGrammarError(begin->lineNo, "Expected ')' in alignment specifier");
         }
         else
-            loggedError.addGrammarError(lineNo, "Expected '(' after '_Alignas'");
+            loggedError.addGrammarError(begin->lineNo, "Expected '(' after '_Alignas'");
     }
     return ret;
 }
@@ -2427,7 +2440,7 @@ std::shared_ptr<Node> AST::atomicTypeSpecifier(std::list<Token>::iterator begin)
             if (begin->type == TokenType::R_BR)
                 ret->children.push_back(std::make_shared<Node>(std::move(*begin)));
             else
-                loggedError.addGrammarError(lineNo, "Expected ')' in atomic type specifier");
+                loggedError.addGrammarError(begin->lineNo, "Expected ')' in atomic type specifier");
         }
         else
         {

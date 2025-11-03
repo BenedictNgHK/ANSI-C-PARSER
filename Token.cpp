@@ -242,15 +242,14 @@ std::string TokenToString::operator()(const TokenType &&t)
     return itr->second;
 }
 
-Token::Token()
+Token::Token() : type(TokenType::END), lineNo(1), lexeme("")
 {
-    memset(this, 0, sizeof(Token));
 }
-Token::Token(TokenType type, const std::string &lexeme) : type(type), lexeme(lexeme)
+Token::Token(TokenType type, const std::string &lexeme, int lineNo) : type(type), lineNo(lineNo), lexeme(lexeme)
 {
 }
 
-Token::Token(TokenType type, const std::string &&lexeme) : type(type), lexeme(lexeme)
+Token::Token(TokenType type, const std::string &&lexeme, int lineNo) : type(type), lineNo(lineNo), lexeme(lexeme)
 {
 }
 

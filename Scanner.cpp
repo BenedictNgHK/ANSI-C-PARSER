@@ -25,7 +25,7 @@ void Scanner::appendList(std::list<Token> &list)
         return;
     if (inputFile.eof())
     {
-        list.push_back(Token(TokenType::END, ""));
+        list.push_back(Token(TokenType::END, "", lineNo));
         end = true;
     }
     if (inputFile.get(ch) && !inputFile.eof())
@@ -41,7 +41,7 @@ void Scanner::appendList(std::list<Token> &list)
                 lineNo++;
             if (inputFile.eof())
             {
-                list.push_back(Token(TokenType::END, ""));
+                list.push_back(Token(TokenType::END, "", lineNo));
                 end = true;
                 return;
             }
@@ -80,7 +80,7 @@ void Scanner::appendList(std::list<Token> &list)
 
             std::string temp;
             temp.push_back(ch);
-            list.push_back(Token(s(ch), temp));
+            list.push_back(Token(s(ch), temp, lineNo));
         }
         else if (ch == '.')
         {
@@ -94,17 +94,17 @@ void Scanner::appendList(std::list<Token> &list)
                 for (inputFile.get(ch1); !inputFile.eof() && isdigit(ch1); inputFile.get(ch1))
                     floatType.push_back(ch1);
                 inputFile.unget();
-                list.push_back(Token(TokenType::CONSTANT, floatType));
+                list.push_back(Token(TokenType::CONSTANT, floatType, lineNo));
                 return;
             }
             inputFile.get(ch2);
             if (ch1 == '.' && ch2 == '.')
-                list.push_back(Token(TokenType::ELLIPSIS, "..."));
+                list.push_back(Token(TokenType::ELLIPSIS, "...", lineNo));
             else
             {
                 inputFile.unget();
                 inputFile.unget();
-                list.push_back(Token(TokenType::DOT, "."));
+                list.push_back(Token(TokenType::DOT, ".", lineNo));
             }
         }
         // Operators
@@ -130,18 +130,18 @@ void Scanner::appendList(std::list<Token> &list)
                             loggedError.addError(lineNo, "unrecognized token");
                     }
 
-                    list.push_back(Token(op(temp), temp));
+                    list.push_back(Token(op(temp), temp, lineNo));
                 }
 
                 else
                 {
                     temp.pop_back();
-                    list.push_back(Token(op(temp), temp));
+                    list.push_back(Token(op(temp), temp, lineNo));
                 }
             }
             else
 
-                list.push_back(Token(op(temp), temp));
+                list.push_back(Token(op(temp), temp, lineNo));
         }
         else
         {
@@ -198,7 +198,7 @@ void Scanner::appendList(std::list<Token> &list)
                                 inputFile.get(ch);
                             }
                         }
-                        list.push_back(Token(TokenType::CONSTANT, temp));
+                        list.push_back(Token(TokenType::CONSTANT, temp, lineNo));
                         break;
                     }
                 }
@@ -275,7 +275,7 @@ void Scanner::appendList(std::list<Token> &list)
                             }
                             Token t;
                             t.lexeme = temp;
-
+                            t.lineNo = lineNo;
                             t.type = TokenType::CONSTANT;
                             list.push_back(t);
                             break;
@@ -291,6 +291,7 @@ void Scanner::appendList(std::list<Token> &list)
                     if (s.isSymbol(ch) || op.beginOperator(ch) || isspace(ch))
                     {
                         Token t;
+                        int tokenLineNo = lineNo;  // Capture lineNo before potential increment
                         if (ch == '\n')
                             lineNo++;
                         inputFile.unget();
@@ -299,6 +300,7 @@ void Scanner::appendList(std::list<Token> &list)
                         {
                             t.lexeme = temp;
                             t.type = k(temp);
+                            t.lineNo = tokenLineNo;
                             list.push_back(t);
                         }
                         else
@@ -356,6 +358,7 @@ void Scanner::appendList(std::list<Token> &list)
                             {
                                 t.type = TokenType::ID;
                                 t.lexeme = temp;
+                                t.lineNo = tokenLineNo;
                                 list.push_back(t);
                             }
                         }
@@ -379,7 +382,7 @@ void Scanner::appendMacro(std::list<Token> &list)
         return;
     if (inputFile.eof())
     {
-        list.push_back(Token(TokenType::END, ""));
+        list.push_back(Token(TokenType::END, "", lineNo));
         end = true;
     }
     if (inputFile.get(ch) && !inputFile.eof())
@@ -395,7 +398,7 @@ void Scanner::appendMacro(std::list<Token> &list)
                 lineNo++;
             if (inputFile.eof())
             {
-                list.push_back(Token(TokenType::END, ""));
+                list.push_back(Token(TokenType::END, "", lineNo));
                 end = true;
                 return;
             }
@@ -434,7 +437,7 @@ void Scanner::appendMacro(std::list<Token> &list)
 
             std::string temp;
             temp.push_back(ch);
-            list.push_back(Token(s(ch), temp));
+            list.push_back(Token(s(ch), temp, lineNo));
         }
         else if (ch == '.')
         {
@@ -448,17 +451,17 @@ void Scanner::appendMacro(std::list<Token> &list)
                 for (inputFile.get(ch1); !inputFile.eof() && isdigit(ch1); inputFile.get(ch1))
                     floatType.push_back(ch1);
                 inputFile.unget();
-                list.push_back(Token(TokenType::CONSTANT, floatType));
+                list.push_back(Token(TokenType::CONSTANT, floatType, lineNo));
                 return;
             }
             inputFile.get(ch2);
             if (ch1 == '.' && ch2 == '.')
-                list.push_back(Token(TokenType::ELLIPSIS, "..."));
+                list.push_back(Token(TokenType::ELLIPSIS, "...", lineNo));
             else
             {
                 inputFile.unget();
                 inputFile.unget();
-                list.push_back(Token(TokenType::DOT, "."));
+                list.push_back(Token(TokenType::DOT, ".", lineNo));
             }
         }
         // Operators
@@ -484,18 +487,18 @@ void Scanner::appendMacro(std::list<Token> &list)
                             loggedError.addError(lineNo, "unrecognized token");
                     }
 
-                    list.push_back(Token(op(temp), temp));
+                    list.push_back(Token(op(temp), temp, lineNo));
                 }
 
                 else
                 {
                     temp.pop_back();
-                    list.push_back(Token(op(temp), temp));
+                    list.push_back(Token(op(temp), temp, lineNo));
                 }
             }
             else
 
-                list.push_back(Token(op(temp), temp));
+                list.push_back(Token(op(temp), temp, lineNo));
         }
         else
         {
@@ -552,7 +555,7 @@ void Scanner::appendMacro(std::list<Token> &list)
                                 inputFile.get(ch);
                             }
                         }
-                        list.push_back(Token(TokenType::CONSTANT, temp));
+                        list.push_back(Token(TokenType::CONSTANT, temp, lineNo));
                         break;
                     }
                 }
@@ -629,7 +632,7 @@ void Scanner::appendMacro(std::list<Token> &list)
                             }
                             Token t;
                             t.lexeme = temp;
-
+                            t.lineNo = lineNo;
                             t.type = TokenType::CONSTANT;
                             list.push_back(t);
                             break;
@@ -645,6 +648,7 @@ void Scanner::appendMacro(std::list<Token> &list)
                     if (s.isSymbol(ch) || op.beginOperator(ch) || isspace(ch))
                     {
                         Token t;
+                        int tokenLineNo = lineNo;  // Capture lineNo before potential increment
                         if (ch == '\n')
                             lineNo++;
                         inputFile.unget();
@@ -653,6 +657,7 @@ void Scanner::appendMacro(std::list<Token> &list)
                         {
                             t.lexeme = temp;
                             t.type = k(temp);
+                            t.lineNo = tokenLineNo;
                             list.push_back(t);
                         }
                         else
@@ -660,6 +665,7 @@ void Scanner::appendMacro(std::list<Token> &list)
 
                             t.type = TokenType::ID;
                             t.lexeme = temp;
+                            t.lineNo = tokenLineNo;
                             list.push_back(t);
                         }
 
@@ -739,6 +745,7 @@ void Scanner::handleStr(std::list<Token> &list)
 
     Token t;
     t.type = TokenType::STRING_LITERAL;
+    int tokenLineNo = lineNo;  // Capture lineNo at start of string
     // t.lexeme.push_back('\"');
     //  int thisLine = lineNo;
     char ch;
@@ -764,6 +771,7 @@ void Scanner::handleStr(std::list<Token> &list)
         else if (ch == '\"')
         {
             // t.lexeme.push_back('\"');
+            t.lineNo = tokenLineNo;
             list.push_back(t);
             break;
         }
@@ -786,6 +794,8 @@ void Scanner::handleChar(std::list<Token> &list)
 
     Token t;
     t.type = TokenType::CONSTANT;
+    int tokenLineNo = lineNo;  // Capture lineNo at start of char
+    t.lineNo = tokenLineNo;
     // int thisLine = lineNo;
     t.lexeme.push_back('\'');
     char ch;
@@ -863,7 +873,7 @@ void Scanner::handleDirective()
         TokenType type = d(temp);
         temp.clear();
         if (type == TokenType::INCLUDE)
-            symbolTable.push_back(Token(type, ""));
+            symbolTable.push_back(Token(type, "", lineNo));
         if (type == TokenType::INCLUDE)
         {
             while (isspace(ch) && ch != '\n')
@@ -878,6 +888,7 @@ void Scanner::handleDirective()
             if (ch == '<')
             {
                 t.type = TokenType::LT;
+                t.lineNo = lineNo;
                 symbolTable.push_back(t);
                 while (inputFile.get(ch) && !inputFile.eof())
                 {
@@ -898,14 +909,17 @@ void Scanner::handleDirective()
                 }
                 t.type = TokenType::INCLUDE_PATH;
                 t.lexeme = temp;
+                t.lineNo = lineNo;
                 symbolTable.push_back(t);
                 t.type = TokenType::GT;
                 t.lexeme.clear();
+                t.lineNo = lineNo;
                 symbolTable.push_back(t);
             }
             else if (ch == '\"')
             {
                 t.type = TokenType::DOUBLE_QUOTE;
+                t.lineNo = lineNo;
                 symbolTable.push_back(t);
 
                 while (inputFile.get(ch) && !inputFile.eof())
@@ -927,9 +941,11 @@ void Scanner::handleDirective()
                 }
                 t.type = TokenType::INCLUDE_PATH;
                 t.lexeme = temp;
+                t.lineNo = lineNo;
                 symbolTable.push_back(t);
                 t.type = TokenType::DOUBLE_QUOTE;
                 t.lexeme.clear();
+                t.lineNo = lineNo;
                 symbolTable.push_back(t);
             }
             else
