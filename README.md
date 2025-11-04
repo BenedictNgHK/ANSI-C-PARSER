@@ -1,14 +1,58 @@
 
-# Pure ANSI C Parse implemented with C++ without 3rd party libraries
-Grammar file: [https://www.quut.com/c/ANSI-C-grammar-y-2011.html](https://www.quut.com/c/ANSI-C-grammar-y-2011.html)
+# ANSI C Parser
 
-## Build
-`make`
+A pure C++ implementation of an ANSI C parser without any third-party dependencies. This project implements a complete parser for the ANSI C programming language that can tokenize, parse, and generate an Abstract Syntax Tree (AST) from C source code.
 
-## Run
-`./run.sh`
+## Features
 
-## Exmaple output:
+- Complete ANSI C grammar support
+- Pure C++ implementation
+- No external dependencies
+- Generates detailed AST output
+- Supports structs, functions, and type definitions
+- Handles includes and basic preprocessor directives
+- Token-level line number tracking
+
+## Getting Started
+
+### Prerequisites
+
+- C++ compiler with C++11 support
+- Make build system
+
+### Building
+
+To build the project, simply run:
+
+```bash
+make
+```
+
+### Running
+
+To run the parser with the example file:
+
+```bash
+./run.sh
+```
+
+## Project Structure
+
+- `AST.cpp/hpp` - Abstract Syntax Tree implementation
+- `Error.cpp/hpp` - Error handling utilities
+- `Scanner.cpp/hpp` - Lexical analyzer/scanner
+- `Token.cpp/hpp` - Token definitions and handling
+- `grammar.y` - ANSI C grammar definition
+- `main.cpp` - Main program entry point
+
+## Grammar Reference
+
+The parser implements the ANSI C grammar as defined in:
+[ANSI C Grammar Specification](https://www.quut.com/c/ANSI-C-grammar-y-2011.html)
+
+## Example Output
+
+The parser generates a detailed token stream and AST. Here's a sample output:
 
 ```
 INCLUDE
